@@ -62,6 +62,51 @@ function selectedItems(container) {
 		});
 }
 
+function pageSizeValue(select, total) {
+	if (select.value === 'all')
+		return total || 1;
+
+	return Math.max(1, parseInt(select.value, 10) || 10);
+}
+
+function updatePagination(rows, state, sizeSelect, summary, prevButton, nextButton) {
+	var total = rows.length;
+	var size = pageSizeValue(sizeSelect, total);
+	var pages = Math.max(1, Math.ceil(total / size));
+
+	if (state.page >= pages)
+		state.page = pages - 1;
+
+	if (state.page < 0)
+		state.page = 0;
+
+	rows.forEach(function(row, index) {
+		var first = state.page * size;
+		var last = first + size;
+		row.style.display = (index >= first && index < last) ? '' : 'none';
+	});
+
+	summary.textContent = String.format('%d / %d', Math.min(state.page + 1, pages), pages);
+	prevButton.disabled = state.page <= 0;
+	nextButton.disabled = state.page >= pages - 1;
+}
+
+function showDownloadResult(container, result) {
+	container.style.display = '';
+	container.innerHTML = '';
+	container.appendChild(E('p', {}, [
+		_('Backup archive created: '),
+		E('strong', {}, result.filename || result.path)
+	]));
+	container.appendChild(E('button', {
+		type: 'button',
+		'class': 'btn cbi-button cbi-button-positive',
+		click: function() {
+			downloadFile(result.path, result.filename);
+		}
+	}, _('Download')));
+}
+
 return view.extend({
 	load: function() {
 		return fs.exec('/usr/bin/wrtbak', [ 'detect', '--json' ]).then(parseJsonOutput);
@@ -80,6 +125,35 @@ return view.extend({
 			E('option', { value: 'wrtbak' }, '.wrtbak'),
 			E('option', { value: 'sysupgrade' }, '.sysupgrade.tar.gz')
 		]);
+		var pageSize = E('select', { 'class': 'cbi-input-select' }, [
+			E('option', { value: '10' }, '10'),
+			E('option', { value: '20' }, '20'),
+			E('option', { value: '50' }, '50'),
+			E('option', { value: 'all' }, _('All'))
+		]);
+		var pageSummary = E('span', { 'class': 'wrtbak-page-summary' }, '');
+		var previousButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button',
+			click: function() {
+				pagination.page--;
+				updatePagination(rows, pagination, pageSize, pageSummary, previousButton, nextButton);
+			}
+		}, _('Previous'));
+		var nextButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button',
+			click: function() {
+				pagination.page++;
+				updatePagination(rows, pagination, pageSize, pageSummary, previousButton, nextButton);
+			}
+		}, _('Next'));
+		var rows = [];
+		var pagination = { page: 0 };
+		var resultPanel = E('div', {
+			'class': 'alert-message info',
+			style: 'display:none'
+		});
 		var table = E('table', { 'class': 'table' }, [
 			E('tr', { 'class': 'tr table-titles' }, [
 				E('th', { 'class': 'th center', style: 'width:3em' }, ''),
@@ -101,7 +175,7 @@ return view.extend({
 			checkbox.checked = itemChecked(item);
 			checkbox.disabled = paths.length === 0;
 
-			table.appendChild(E('tr', { 'class': 'tr' }, [
+			var row = E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td center' }, checkbox),
 				E('td', { 'class': 'td' }, [
 					E('strong', {}, item.label || item.id),
@@ -112,10 +186,19 @@ return view.extend({
 					return E('div', {}, E('code', {}, path));
 				}) : E('em', {}, _('No known paths'))),
 				E('td', { 'class': 'td' }, services.length ? services.join(', ') : '-')
-			]));
+			]);
+
+			rows.push(row);
+			table.appendChild(row);
+		});
+
+		pageSize.addEventListener('change', function() {
+			pagination.page = 0;
+			updatePagination(rows, pagination, pageSize, pageSummary, previousButton, nextButton);
 		});
 
 		var createButton = E('button', {
+			type: 'button',
 			'class': 'btn cbi-button cbi-button-action',
 			click: ui.createHandlerFn(this, function(ev) {
 				var root = ev.currentTarget.closest('.cbi-section');
@@ -137,6 +220,7 @@ return view.extend({
 					'--items', ids.join(','),
 					'--format', format.value
 				]).then(parseJsonOutput).then(function(result) {
+					showDownloadResult(resultPanel, result);
 					ui.addNotification(null, E('p', {}, _('Backup archive created.')), 'info');
 					downloadFile(result.path, result.filename);
 				}).catch(function(err) {
@@ -145,7 +229,7 @@ return view.extend({
 			})
 		}, _('Create and download'));
 
-		return E('div', { 'class': 'wrtbak-page' }, [
+		var page = E('div', { 'class': 'wrtbak-page' }, [
 			E('h2', {}, _('Wrtbak')),
 			E('div', { 'class': 'cbi-section' }, [
 				E('div', { 'class': 'cbi-value' }, [
@@ -156,9 +240,23 @@ return view.extend({
 					E('label', { 'class': 'cbi-value-title' }, _('Archive')),
 					E('div', { 'class': 'cbi-value-field' }, format)
 				]),
+				E('div', { 'class': 'cbi-value' }, [
+					E('label', { 'class': 'cbi-value-title' }, _('Rows per page')),
+					E('div', { 'class': 'cbi-value-field' }, [
+						pageSize,
+						' ',
+						previousButton,
+						' ',
+						pageSummary,
+						' ',
+						nextButton
+					])
+				]),
 				table,
+				resultPanel,
 				E('div', { 'class': 'cbi-page-actions' }, [
 					E('button', {
+						type: 'button',
 						'class': 'btn cbi-button',
 						click: function() { window.location.reload(); }
 					}, _('Refresh')),
@@ -167,5 +265,9 @@ return view.extend({
 				])
 			])
 		]);
+
+		updatePagination(rows, pagination, pageSize, pageSummary, previousButton, nextButton);
+
+		return page;
 	}
 });
