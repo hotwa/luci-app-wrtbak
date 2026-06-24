@@ -135,18 +135,22 @@ jobs:
       - name: List SDK artifacts
         run: |
           set -euo pipefail
-          find sdk-artifacts -type f | sort
-          find sdk-artifacts -type f \( -name '*.ipk' -o -name '*.apk' \) | grep -q .
+          wrtbak_dir="sdk-artifacts/bin/packages/${{ inputs.arch || 'aarch64_cortex-a53' }}/wrtbak"
+          test -d "$wrtbak_dir"
+          find "$wrtbak_dir" -type f | sort
+          test -n "$(find "$wrtbak_dir" -maxdepth 1 -type f \( -name 'luci-app-wrtbak*.ipk' -o -name 'luci-app-wrtbak*.apk' \) -print -quit)"
 
       - name: Upload SDK packages
         uses: actions/upload-artifact@v4
         with:
           name: luci-app-wrtbak-sdk-${{ inputs.arch || 'aarch64_cortex-a53' }}
           path: |
-            sdk-artifacts/bin/packages/**/*.ipk
-            sdk-artifacts/bin/packages/**/*.apk
-            sdk-artifacts/bin/packages/**/Packages*
-            sdk-artifacts/bin/packages/**/APKINDEX*
+            sdk-artifacts/bin/packages/${{ inputs.arch || 'aarch64_cortex-a53' }}/wrtbak/*.ipk
+            sdk-artifacts/bin/packages/${{ inputs.arch || 'aarch64_cortex-a53' }}/wrtbak/*.apk
+            sdk-artifacts/bin/packages/${{ inputs.arch || 'aarch64_cortex-a53' }}/wrtbak/Packages*
+            sdk-artifacts/bin/packages/${{ inputs.arch || 'aarch64_cortex-a53' }}/wrtbak/APKINDEX*
+            sdk-artifacts/bin/packages/${{ inputs.arch || 'aarch64_cortex-a53' }}/wrtbak/index.json
+            sdk-artifacts/bin/packages/${{ inputs.arch || 'aarch64_cortex-a53' }}/wrtbak/packages.adb
           if-no-files-found: error
 
       - name: Upload SDK logs

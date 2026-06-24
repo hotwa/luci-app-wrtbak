@@ -164,7 +164,7 @@ The package repository keeps its OpenWrt `Makefile` at the repository root so `h
 
 The SDK job uploads:
 
-- `luci-app-wrtbak-sdk-<arch>`: installable `.ipk` and/or `.apk` packages plus generated package indexes.
+- `luci-app-wrtbak-sdk-<arch>`: installable `luci-app-wrtbak` `.ipk` and/or `.apk` packages plus generated indexes from the `wrtbak` feed.
 - `luci-app-wrtbak-sdk-logs-<arch>`: SDK build logs and package feed metadata.
 
 ## Security Notes
