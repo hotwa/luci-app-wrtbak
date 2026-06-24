@@ -1,10 +1,11 @@
 # luci-app-wrtbak
 
-`luci-app-wrtbak` is a LuCI app for profile-based OpenWrt configuration backup and restore archives.
+`luci-app-wrtbak` is intended to provide a LuCI app for profile-based OpenWrt configuration backup and restore archives.
 
 The project defines a `.wrtbak` archive format for portable, profile-aware backups. A `.wrtbak` file is a gzip-compressed tar archive containing at least:
 
 - `manifest.json`
+- `README.txt`
 - `rootfs/`
 
 Archives may also be exported as OpenWrt-compatible `.sysupgrade.tar.gz` files for restore flows that use native OpenWrt tooling.
@@ -21,4 +22,3 @@ Do not store real backups, device-specific secrets, or private restore archives 
 - [OpenWrt CI integration](docs/OPENWRT_CI_INTEGRATION.md)
 - [Development notes](docs/DEVELOPMENT.md)
 - [Roadmap](docs/ROADMAP.md)
-

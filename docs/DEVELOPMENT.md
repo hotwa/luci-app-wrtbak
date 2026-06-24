@@ -1,6 +1,6 @@
 # Development
 
-This repository contains the public package source, documentation, and non-secret examples for `luci-app-wrtbak`.
+This repository contains the public documentation and non-secret examples for `luci-app-wrtbak`. Package source will be added as the OpenWrt package skeleton is implemented.
 
 ## Repository Structure
 
@@ -22,7 +22,7 @@ This repository contains the public package source, documentation, and non-secre
         └── manifest.json
 ```
 
-Future package code should follow normal OpenWrt package conventions, including a package `Makefile`, LuCI assets, rpcd/ubus handlers, and shell or Lua helpers as they are implemented.
+Future package code should follow normal OpenWrt package conventions, including a package `Makefile`, LuCI assets, rpcd/ubus handlers, and shell or Lua helpers as they are implemented. The current docs/examples-only tree is not yet buildable as an OpenWrt package.
 
 ## Basic Checks
 
@@ -49,4 +49,3 @@ git check-ignore -v example.wrtbak example.sysupgrade.tar.gz package.ipk package
 ## Security Notes
 
 Keep this repository free of real backup archives and device secrets. Example files should use placeholder metadata only.
-
