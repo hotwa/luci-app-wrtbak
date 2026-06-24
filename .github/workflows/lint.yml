@@ -20,9 +20,9 @@ jobs:
       - name: Check POSIX shell syntax
         run: |
           set -euo pipefail
-          scripts=(root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/test_cli_fixture.sh)
+          scripts=(root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/*.sh)
 
-          sh -n root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/test_cli_fixture.sh
+          sh -n root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/*.sh
           for script in "${scripts[@]}"; do
             sh -n "$script"
           done
@@ -30,10 +30,10 @@ jobs:
       - name: Check BusyBox ash syntax
         run: |
           set -euo pipefail
-          scripts=(root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/test_cli_fixture.sh)
+          scripts=(root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/*.sh)
 
           if command -v busybox >/dev/null 2>&1; then
-            busybox ash -n root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/test_cli_fixture.sh
+            busybox ash -n root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/*.sh
             for script in "${scripts[@]}"; do
               busybox ash -n "$script"
             done
@@ -51,7 +51,9 @@ jobs:
       - name: Run CLI fixture test
         run: |
           set -euo pipefail
-          sh tests/test_cli_fixture.sh
+          for test_script in tests/*.sh; do
+            sh "$test_script"
+          done
 
       - name: Scan for sensitive-looking values
         run: |

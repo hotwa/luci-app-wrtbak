@@ -18,14 +18,18 @@ fi
 
 . "$WRTBAK_LIBDIR/common.sh"
 . "$WRTBAK_LIBDIR/manifest.sh"
+. "$WRTBAK_LIBDIR/items.sh"
 . "$WRTBAK_LIBDIR/backup.sh"
 . "$WRTBAK_LIBDIR/pack.sh"
+. "$WRTBAK_LIBDIR/web.sh"
 
 wrtbak_usage() {
 	cat <<'EOF'
 Usage:
   wrtbak info
-  wrtbak create --profile NAME --output FILE
+  wrtbak detect [--json]
+  wrtbak create --profile NAME --output FILE [--items IDS]
+  wrtbak create-download --profile NAME --items IDS --format wrtbak|sysupgrade
   wrtbak export-sysupgrade --input FILE --output FILE
   wrtbak inspect FILE
 EOF
@@ -42,6 +46,7 @@ wrtbak_info() {
 wrtbak_parse_create() {
 	wrtbak_profile=
 	wrtbak_output=
+	wrtbak_items=
 
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
@@ -55,6 +60,11 @@ wrtbak_parse_create() {
 				wrtbak_output=$2
 				shift 2
 				;;
+			--items)
+				[ "$#" -ge 2 ] || wrtbak_die "--items requires a value"
+				wrtbak_items=$2
+				shift 2
+				;;
 			-h|--help)
 				wrtbak_usage
 				exit 0
@@ -65,7 +75,26 @@ wrtbak_parse_create() {
 		esac
 	done
 
-	wrtbak_create_archive "$wrtbak_profile" "$wrtbak_output"
+	wrtbak_create_archive "$wrtbak_profile" "$wrtbak_output" "$wrtbak_items"
+}
+
+wrtbak_parse_detect() {
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown detect argument: $1"
+				;;
+		esac
+	done
+
+	wrtbak_detect_items_json
 }
 
 wrtbak_parse_export_sysupgrade() {
@@ -97,6 +126,41 @@ wrtbak_parse_export_sysupgrade() {
 	wrtbak_export_sysupgrade "$wrtbak_input" "$wrtbak_output"
 }
 
+wrtbak_parse_create_download() {
+	wrtbak_profile=
+	wrtbak_items=
+	wrtbak_format=wrtbak
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--profile)
+				[ "$#" -ge 2 ] || wrtbak_die "--profile requires a value"
+				wrtbak_profile=$2
+				shift 2
+				;;
+			--items)
+				[ "$#" -ge 2 ] || wrtbak_die "--items requires a value"
+				wrtbak_items=$2
+				shift 2
+				;;
+			--format)
+				[ "$#" -ge 2 ] || wrtbak_die "--format requires a value"
+				wrtbak_format=$2
+				shift 2
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown create-download argument: $1"
+				;;
+		esac
+	done
+
+	wrtbak_create_download "$wrtbak_profile" "$wrtbak_items" "$wrtbak_format"
+}
+
 if [ "$#" -lt 1 ]; then
 	wrtbak_usage >&2
 	exit 1
@@ -110,8 +174,14 @@ case "$wrtbak_command" in
 		[ "$#" -eq 0 ] || wrtbak_die "info does not accept arguments"
 		wrtbak_info
 		;;
+	detect|list-items)
+		wrtbak_parse_detect "$@"
+		;;
 	create)
 		wrtbak_parse_create "$@"
+		;;
+	create-download)
+		wrtbak_parse_create_download "$@"
 		;;
 	export-sysupgrade)
 		wrtbak_parse_export_sysupgrade "$@"

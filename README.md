@@ -10,6 +10,14 @@ The project defines a `.wrtbak` archive format for portable, profile-aware backu
 
 Archives may also be exported as OpenWrt-compatible `.sysupgrade.tar.gz` files for restore flows that use native OpenWrt tooling.
 
+Current capabilities:
+
+- Detect installed `luci-app-*` packages from `apk` or `opkg`.
+- Map known OpenWrt services to backup paths, including network, wireless, Dropbear, DDNS-Go, Nikki, MosDNS, Tailscale, and WireGuard.
+- Create selected-item `.wrtbak` archives from the CLI or LuCI.
+- Export selected backups as native `.sysupgrade.tar.gz` archives.
+- Download generated archives through LuCI's authenticated `cgi-download` flow.
+
 ## Security Warning
 
 OpenWrt configuration backups can contain sensitive information, including PPPoE credentials, DDNS tokens, WireGuard private keys, Nikki proxy configuration, Tailscale state, Dropbear keys, Wi-Fi passwords, SSH authorized keys, and other secrets.
