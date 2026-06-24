@@ -1,0 +1,25 @@
+{
+	"luci-app-wrtbak": {
+		"description": "Grant access to LuCI wrtbak",
+		"read": {
+			"cgi-io": [ "download" ],
+			"file": {
+				"/tmp/wrtbak/*": [ "read", "stat" ],
+				"/usr/bin/wrtbak detect --json": [ "exec" ],
+				"/usr/bin/wrtbak info": [ "exec" ]
+			},
+			"ubus": {
+				"file": [ "exec", "read", "stat" ],
+				"session": [ "access" ]
+			}
+		},
+		"write": {
+			"file": {
+				"/usr/bin/wrtbak create-download *": [ "exec" ]
+			},
+			"ubus": {
+				"file": [ "exec" ]
+			}
+		}
+	}
+}

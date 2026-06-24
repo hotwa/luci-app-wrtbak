@@ -20,16 +20,25 @@ This repository contains the public documentation, non-secret examples, and the 
 │   └── ROADMAP.md
 ├── root/
 │   ├── etc/config/wrtbak
+│   ├── share/luci/menu.d/luci-app-wrtbak.json
+│   ├── share/rpcd/acl.d/luci-app-wrtbak.json
 │   └── usr/
 │       ├── bin/wrtbak
 │       └── lib/wrtbak/
 │           ├── backup.sh
 │           ├── common.sh
+│           ├── items.sh
 │           ├── manifest.sh
 │           ├── pack.sh
+│           ├── web.sh
 │           └── paths.default
+├── htdocs/
+│   └── luci-static/resources/view/wrtbak/index.js
 ├── tests/
-│   └── test_cli_fixture.sh
+│   ├── test_cli_fixture.sh
+│   ├── test_detect_fixture.sh
+│   ├── test_luci_layout.sh
+│   └── test_web_create_fixture.sh
 └── examples/
     ├── dorm-ax1800/
     │   └── manifest.json
@@ -39,7 +48,7 @@ This repository contains the public documentation, non-secret examples, and the 
         └── manifest.json
 ```
 
-The current package skeleton provides a shell CLI for archive creation, inspection, and `.sysupgrade.tar.gz` export. LuCI views, rpcd/ubus handlers, and restore flows are intentionally not implemented yet.
+The current package provides a shell CLI for archive creation, inspection, installed package detection, selected-item archive generation, LuCI-triggered downloads, and `.sysupgrade.tar.gz` export. Restore flows are intentionally not implemented yet.
 
 ## Runtime Assumptions
 
@@ -77,13 +86,15 @@ git check-ignore -v example.wrtbak example.sysupgrade.tar.gz package.ipk package
 Check shell syntax:
 
 ```sh
-sh -n root/usr/bin/wrtbak root/usr/lib/wrtbak/common.sh root/usr/lib/wrtbak/manifest.sh root/usr/lib/wrtbak/backup.sh root/usr/lib/wrtbak/pack.sh tests/test_cli_fixture.sh
+sh -n root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/*.sh
 ```
 
 Run the local fixture test:
 
 ```sh
-sh tests/test_cli_fixture.sh
+for test_script in tests/*.sh; do
+  sh "$test_script"
+done
 ```
 
 ## Local Lint Workflow

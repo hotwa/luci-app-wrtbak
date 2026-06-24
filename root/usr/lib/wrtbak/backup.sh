@@ -188,6 +188,7 @@ wrtbak_write_readme() {
 wrtbak_create_archive() {
 	wrtbak_profile=$1
 	wrtbak_output=$2
+	wrtbak_selected_items=${3:-}
 
 	[ -n "$wrtbak_profile" ] || wrtbak_die "missing profile"
 	[ -n "$wrtbak_output" ] || wrtbak_die "missing output file"
@@ -208,6 +209,11 @@ wrtbak_create_archive() {
 	mkdir -p "$wrtbak_stage/rootfs" || wrtbak_die "cannot create staging directory"
 	: > "$wrtbak_inventory"
 	: > "$wrtbak_seen"
+
+	if [ -n "$wrtbak_selected_items" ]; then
+		WRTBAK_PATHS_FILE="$wrtbak_tmp/selected.paths"
+		wrtbak_write_paths_for_items "$wrtbak_selected_items" "$WRTBAK_PATHS_FILE"
+	fi
 
 	wrtbak_collect_paths "$wrtbak_stage" "$wrtbak_inventory" "$wrtbak_seen" "$wrtbak_tmp"
 	wrtbak_manifest_write "$wrtbak_inventory" "$wrtbak_stage/manifest.json" "$wrtbak_profile" "$wrtbak_backup_id" "$wrtbak_created"

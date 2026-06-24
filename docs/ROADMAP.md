@@ -5,11 +5,14 @@
 - CLI-oriented archive creation and validation.
 - OpenWrt package skeleton.
 - Documented `.wrtbak` and `.sysupgrade.tar.gz` formats.
+- Installed package detection and selected-item archive creation.
+- LuCI page for selecting backup items and downloading generated archives.
 
 ## v0.2
 
-- LuCI application views for profile selection, backup creation, and restore review.
-- rpcd/ubus integration for privileged backup and restore operations.
+- Restore review page for uploaded `.wrtbak` archives.
+- Selective restore planning with manifest and device compatibility checks.
+- rpcd/ubus integration for privileged restore operations.
 
 ## v0.3
 
@@ -19,4 +22,3 @@
 ## v0.4
 
 - Desktop integration hooks for importing, exporting, and organizing backup archives outside the router UI.
-
