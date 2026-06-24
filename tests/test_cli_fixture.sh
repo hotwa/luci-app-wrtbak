@@ -2,13 +2,19 @@
 set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-work_dir="$repo_dir/.tmp/wrtbak-cli-test"
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-cli-test.XXXXXX")
 fixture_root="$work_dir/root"
 paths_file="$work_dir/paths.default"
 archive="$work_dir/test.wrtbak"
 sysupgrade="$work_dir/test.sysupgrade.tar.gz"
+libdir="$repo_dir/root/usr/lib/wrtbak"
+cli="$repo_dir/root/usr/bin/wrtbak"
 
-rm -rf "$work_dir"
+cleanup() {
+	rm -rf "$work_dir"
+}
+trap cleanup EXIT HUP INT TERM
+
 mkdir -p \
 	"$fixture_root/etc/config" \
 	"$fixture_root/etc/dropbear" \
@@ -27,7 +33,7 @@ config interface 'lan'
 EOT
 
 cat >"$fixture_root/etc/dropbear/authorized_keys" <<'EOT'
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureOnlyForTests wrtbak-test
+placeholder-authorized-key-for-tests
 EOT
 
 chmod 600 "$fixture_root/etc/config/system" "$fixture_root/etc/dropbear/authorized_keys"
@@ -40,16 +46,25 @@ cat >"$paths_file" <<'EOT'
 /etc/config/not-present
 EOT
 
+assert_reject() {
+	if "$@" >"$work_dir/reject.out" 2>"$work_dir/reject.err"; then
+		echo "expected command to fail: $*" >&2
+		cat "$work_dir/reject.out" >&2
+		cat "$work_dir/reject.err" >&2
+		exit 1
+	fi
+}
+
 WRTBAK_ROOT="$fixture_root" \
-WRTBAK_LIBDIR="$repo_dir/root/usr/lib/wrtbak" \
+WRTBAK_LIBDIR="$libdir" \
 WRTBAK_PATHS_FILE="$paths_file" \
-	"$repo_dir/root/usr/bin/wrtbak" info >"$work_dir/info.txt"
+	"$cli" info >"$work_dir/info.txt"
 grep -q "luci-app-wrtbak" "$work_dir/info.txt"
 
 WRTBAK_ROOT="$fixture_root" \
-WRTBAK_LIBDIR="$repo_dir/root/usr/lib/wrtbak" \
+WRTBAK_LIBDIR="$libdir" \
 WRTBAK_PATHS_FILE="$paths_file" \
-	"$repo_dir/root/usr/bin/wrtbak" create --profile fixture --output "$archive"
+	"$cli" create --profile fixture --output "$archive"
 
 tar tzf "$archive" >"$work_dir/wrtbak.list"
 grep -q '^manifest.json$' "$work_dir/wrtbak.list"
@@ -89,12 +104,12 @@ assert network["mode"] == "0644"
 assert network["type"] == "file"
 PY
 
-WRTBAK_LIBDIR="$repo_dir/root/usr/lib/wrtbak" \
-	"$repo_dir/root/usr/bin/wrtbak" inspect "$archive" >"$work_dir/inspect.txt"
+WRTBAK_LIBDIR="$libdir" \
+	"$cli" inspect "$archive" >"$work_dir/inspect.txt"
 grep -q "manifest.json" "$work_dir/inspect.txt"
 
-WRTBAK_LIBDIR="$repo_dir/root/usr/lib/wrtbak" \
-	"$repo_dir/root/usr/bin/wrtbak" export-sysupgrade --input "$archive" --output "$sysupgrade"
+WRTBAK_LIBDIR="$libdir" \
+	"$cli" export-sysupgrade --input "$archive" --output "$sysupgrade"
 
 tar tzf "$sysupgrade" >"$work_dir/sysupgrade.list"
 grep -q '^etc/backup/wrtbak-manifest.json$' "$work_dir/sysupgrade.list"
@@ -105,5 +120,81 @@ if grep -q '^rootfs/' "$work_dir/sysupgrade.list"; then
 fi
 
 tar xOzf "$sysupgrade" etc/backup/wrtbak-manifest.json | python3 -m json.tool >"$work_dir/sysupgrade-manifest.pretty.json"
+
+python3 - "$work_dir" <<'PY'
+import io
+import json
+import tarfile
+import sys
+
+work_dir = sys.argv[1]
+manifest = json.dumps({
+    "schema": "wrtbak/v1",
+    "profile": "negative",
+    "backup_id": "negative",
+    "created_at": "2026-06-24T00:00:00Z",
+    "tool_version": "0.1.0",
+    "device": {},
+    "firmware": {},
+    "restore": {},
+    "files": [],
+}).encode()
+
+def add_file(tar, name, data):
+    info = tarfile.TarInfo(name)
+    info.size = len(data)
+    info.mode = 0o600
+    tar.addfile(info, io.BytesIO(data))
+
+def add_dir(tar, name):
+    info = tarfile.TarInfo(name)
+    info.type = tarfile.DIRTYPE
+    info.mode = 0o700
+    tar.addfile(info)
+
+def write_archive(path, entries):
+    with tarfile.open(f"{work_dir}/{path}", "w:gz") as tar:
+        for kind, name, data in entries:
+            if kind == "file":
+                add_file(tar, name, data)
+            elif kind == "dir":
+                add_dir(tar, name)
+            elif kind == "symlink":
+                info = tarfile.TarInfo(name)
+                info.type = tarfile.SYMTYPE
+                info.linkname = data
+                tar.addfile(info)
+
+write_archive("unsafe-dash.wrtbak", [
+    ("file", "manifest.json", manifest),
+    ("dir", "rootfs", None),
+    ("file", "rootfs/-dash", b"bad"),
+])
+write_archive("symlink.wrtbak", [
+    ("file", "manifest.json", manifest),
+    ("dir", "rootfs", None),
+    ("dir", "rootfs/etc", None),
+    ("symlink", "rootfs/etc/link", "/etc/passwd"),
+])
+write_archive("missing-manifest.wrtbak", [
+    ("dir", "rootfs", None),
+    ("file", "rootfs/etc-config-system", b"data"),
+])
+write_archive("missing-rootfs.wrtbak", [
+    ("file", "manifest.json", manifest),
+])
+PY
+
+for bad_archive in unsafe-dash.wrtbak symlink.wrtbak missing-manifest.wrtbak missing-rootfs.wrtbak; do
+	assert_reject env WRTBAK_LIBDIR="$libdir" "$cli" inspect "$work_dir/$bad_archive"
+	assert_reject env WRTBAK_LIBDIR="$libdir" "$cli" export-sysupgrade --input "$work_dir/$bad_archive" --output "$work_dir/$bad_archive.sysupgrade.tar.gz"
+done
+
+bad_profile=$(printf 'bad\001profile')
+assert_reject env \
+	WRTBAK_ROOT="$fixture_root" \
+	WRTBAK_LIBDIR="$libdir" \
+	WRTBAK_PATHS_FILE="$paths_file" \
+	"$cli" create --profile "$bad_profile" --output "$work_dir/control-char.wrtbak"
 
 echo "fixture CLI archive test passed"

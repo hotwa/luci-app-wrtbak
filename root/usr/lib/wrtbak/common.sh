@@ -62,7 +62,40 @@ wrtbak_mkdir_parent() {
 	mkdir -p "$wrtbak_parent" || wrtbak_die "cannot create directory $wrtbak_parent"
 }
 
+wrtbak_cleanup_tmp_dir() {
+	if [ -n "${wrtbak_tmp:-}" ] && [ -d "$wrtbak_tmp" ]; then
+		rm -rf "$wrtbak_tmp"
+	fi
+}
+
+wrtbak_set_tmp_cleanup() {
+	wrtbak_tmp=$1
+	trap 'wrtbak_cleanup_tmp_dir' EXIT
+	trap 'wrtbak_cleanup_tmp_dir; exit 1' HUP INT TERM
+}
+
+wrtbak_clear_tmp_cleanup() {
+	wrtbak_cleanup_tmp_dir
+	wrtbak_tmp=
+	trap - EXIT HUP INT TERM
+}
+
+wrtbak_has_c0_control() {
+	case "$1" in
+		*'
+'*)
+			return 0
+			;;
+	esac
+
+	printf '%s' "$1" | LC_ALL=C grep '[[:cntrl:]]' >/dev/null 2>&1
+}
+
 wrtbak_json_escape() {
+	if wrtbak_has_c0_control "$1"; then
+		wrtbak_die "JSON string contains control characters"
+	fi
+
 	printf '%s' "$1" | awk 'BEGIN { ORS = "" } {
 		if (NR > 1) {
 			printf "\\n"
@@ -229,9 +262,32 @@ wrtbak_sha256_of() {
 
 wrtbak_is_safe_member() {
 	case "$1" in
-		""|/*|../*|*/../*|*/..|..|.|./*|*/./*)
+		""|/*|../*|*/../*|*/..|..|.|./*|*/./*|*//*)
 			return 1
 			;;
 	esac
+
+	case "$1" in
+		*[[:space:]]*)
+			return 1
+			;;
+	esac
+
+	if wrtbak_has_c0_control "$1"; then
+		return 1
+	fi
+
+	case "/$1/" in
+		*/-*)
+			return 1
+			;;
+	esac
+
 	return 0
+}
+
+wrtbak_require_safe_member() {
+	if ! wrtbak_is_safe_member "$1"; then
+		wrtbak_die "unsafe archive member: $1"
+	fi
 }

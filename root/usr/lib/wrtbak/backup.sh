@@ -60,6 +60,7 @@ wrtbak_collect_directory_entry() {
 	wrtbak_inventory=$4
 	wrtbak_seen=$5
 	wrtbak_archive_path="rootfs/$(wrtbak_strip_leading_slash "$wrtbak_target_path")"
+	wrtbak_require_safe_member "$wrtbak_archive_path"
 
 	if wrtbak_seen_archive_path "$wrtbak_seen" "$wrtbak_archive_path"; then
 		return 0
@@ -80,6 +81,7 @@ wrtbak_collect_file_entry() {
 	wrtbak_inventory=$4
 	wrtbak_seen=$5
 	wrtbak_archive_path="rootfs/$(wrtbak_strip_leading_slash "$wrtbak_target_path")"
+	wrtbak_require_safe_member "$wrtbak_archive_path"
 
 	if wrtbak_seen_archive_path "$wrtbak_seen" "$wrtbak_archive_path"; then
 		return 0
@@ -195,6 +197,7 @@ wrtbak_create_archive() {
 	mkdir -p "$wrtbak_output_dir" || wrtbak_die "cannot create output directory $wrtbak_output_dir"
 
 	wrtbak_tmp=$(mktemp -d "$wrtbak_output_dir/.wrtbak-create.XXXXXX") || wrtbak_die "cannot create temporary directory"
+	wrtbak_set_tmp_cleanup "$wrtbak_tmp"
 	wrtbak_stage="$wrtbak_tmp/stage"
 	wrtbak_inventory="$wrtbak_tmp/inventory.tsv"
 	wrtbak_seen="$wrtbak_tmp/seen.txt"
@@ -211,14 +214,12 @@ wrtbak_create_archive() {
 	wrtbak_write_readme "$wrtbak_stage/README.txt" "$wrtbak_profile" "$wrtbak_backup_id" "$wrtbak_created"
 
 	if ! (cd "$wrtbak_stage" && tar -czf "$wrtbak_out_tmp" manifest.json README.txt rootfs); then
-		rm -rf "$wrtbak_tmp"
 		wrtbak_die "failed to create archive"
 	fi
 
 	mv "$wrtbak_out_tmp" "$wrtbak_output_abs" || {
-		rm -rf "$wrtbak_tmp"
 		wrtbak_die "cannot write $wrtbak_output_abs"
 	}
-	rm -rf "$wrtbak_tmp"
+	wrtbak_clear_tmp_cleanup
 	printf '%s\n' "$wrtbak_output_abs"
 }
