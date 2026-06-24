@@ -145,7 +145,7 @@ return view.extend({
 			})
 		}, _('Create and download'));
 
-		return E('div', { 'class': 'cbi-map' }, [
+		return E('div', { 'class': 'wrtbak-page' }, [
 			E('h2', {}, _('Wrtbak')),
 			E('div', { 'class': 'cbi-section' }, [
 				E('div', { 'class': 'cbi-value' }, [
