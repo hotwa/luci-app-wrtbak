@@ -1,0 +1,6 @@
+config wrtbak 'main'
+	option enabled '1'
+	option max_upload_mb '32'
+	option output_dir '/tmp/wrtbak'
+	option rollback_dir '/overlay/wrtbak/rollback'
+	option default_mode 'review-required'

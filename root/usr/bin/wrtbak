@@ -1,0 +1,130 @@
+#!/bin/sh
+set -eu
+
+: "${WRTBAK_LIBDIR:=/usr/lib/wrtbak}"
+
+if [ ! -r "$WRTBAK_LIBDIR/common.sh" ]; then
+	wrtbak_script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+	wrtbak_candidate=$(CDPATH= cd -- "$wrtbak_script_dir/../lib/wrtbak" 2>/dev/null && pwd || true)
+	if [ -n "$wrtbak_candidate" ] && [ -r "$wrtbak_candidate/common.sh" ]; then
+		WRTBAK_LIBDIR=$wrtbak_candidate
+	fi
+fi
+
+[ -r "$WRTBAK_LIBDIR/common.sh" ] || {
+	echo "wrtbak: cannot find common.sh in $WRTBAK_LIBDIR" >&2
+	exit 1
+}
+
+. "$WRTBAK_LIBDIR/common.sh"
+. "$WRTBAK_LIBDIR/manifest.sh"
+. "$WRTBAK_LIBDIR/backup.sh"
+. "$WRTBAK_LIBDIR/pack.sh"
+
+wrtbak_usage() {
+	cat <<'EOF'
+Usage:
+  wrtbak info
+  wrtbak create --profile NAME --output FILE
+  wrtbak export-sysupgrade --input FILE --output FILE
+  wrtbak inspect FILE
+EOF
+}
+
+wrtbak_info() {
+	printf 'luci-app-wrtbak %s\n' "$WRTBAK_VERSION"
+	printf 'root: %s\n' "${WRTBAK_ROOT:-/}"
+	printf 'libdir: %s\n' "$WRTBAK_LIBDIR"
+	printf 'paths_file: %s\n' "$(wrtbak_paths_file)"
+	printf 'format: wrtbak/v1\n'
+}
+
+wrtbak_parse_create() {
+	wrtbak_profile=
+	wrtbak_output=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--profile)
+				[ "$#" -ge 2 ] || wrtbak_die "--profile requires a value"
+				wrtbak_profile=$2
+				shift 2
+				;;
+			--output)
+				[ "$#" -ge 2 ] || wrtbak_die "--output requires a value"
+				wrtbak_output=$2
+				shift 2
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown create argument: $1"
+				;;
+		esac
+	done
+
+	wrtbak_create_archive "$wrtbak_profile" "$wrtbak_output"
+}
+
+wrtbak_parse_export_sysupgrade() {
+	wrtbak_input=
+	wrtbak_output=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--input)
+				[ "$#" -ge 2 ] || wrtbak_die "--input requires a value"
+				wrtbak_input=$2
+				shift 2
+				;;
+			--output)
+				[ "$#" -ge 2 ] || wrtbak_die "--output requires a value"
+				wrtbak_output=$2
+				shift 2
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown export-sysupgrade argument: $1"
+				;;
+		esac
+	done
+
+	wrtbak_export_sysupgrade "$wrtbak_input" "$wrtbak_output"
+}
+
+if [ "$#" -lt 1 ]; then
+	wrtbak_usage >&2
+	exit 1
+fi
+
+wrtbak_command=$1
+shift
+
+case "$wrtbak_command" in
+	info)
+		[ "$#" -eq 0 ] || wrtbak_die "info does not accept arguments"
+		wrtbak_info
+		;;
+	create)
+		wrtbak_parse_create "$@"
+		;;
+	export-sysupgrade)
+		wrtbak_parse_export_sysupgrade "$@"
+		;;
+	inspect)
+		[ "$#" -eq 1 ] || wrtbak_die "inspect requires exactly one archive path"
+		wrtbak_inspect_archive "$1"
+		;;
+	-h|--help|help)
+		wrtbak_usage
+		;;
+	*)
+		wrtbak_usage >&2
+		wrtbak_die "unknown command: $wrtbak_command"
+		;;
+esac
