@@ -1,0 +1,80 @@
+name: Lint
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check POSIX shell syntax
+        run: |
+          set -euo pipefail
+          scripts=(root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/test_cli_fixture.sh)
+
+          sh -n root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/test_cli_fixture.sh
+          for script in "${scripts[@]}"; do
+            sh -n "$script"
+          done
+
+      - name: Check BusyBox ash syntax
+        run: |
+          set -euo pipefail
+          scripts=(root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/test_cli_fixture.sh)
+
+          if command -v busybox >/dev/null 2>&1; then
+            busybox ash -n root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/test_cli_fixture.sh
+            for script in "${scripts[@]}"; do
+              busybox ash -n "$script"
+            done
+          else
+            echo "busybox not found; skipping ash syntax check"
+          fi
+
+      - name: Validate example manifests
+        run: |
+          set -euo pipefail
+          for manifest in examples/*/manifest.json; do
+            python3 -m json.tool "$manifest" >/dev/null
+          done
+
+      - name: Run CLI fixture test
+        run: |
+          set -euo pipefail
+          sh tests/test_cli_fixture.sh
+
+      - name: Scan for sensitive-looking values
+        run: |
+          set -euo pipefail
+          matches=$(mktemp)
+
+          if git grep -nIE \
+            -e 'BEGIN[[:space:]]+OPENSSH' \
+            -e 'PRIVATE[[:space:]]+KEY' \
+            -e '(^|[^[:alnum:]_])hskey-[[:alnum:]_-]{8,}' \
+            -e '(^|[^[:alnum:]_])tskey-[[:alnum:]_-]{8,}' \
+            -e '(^|[^[:alnum:]_])(token|password)[[:space:]]*=[[:space:]]*[^[:space:];#<>]{4,}' \
+            -e 'AAAAC3NzaC1lZDI1NTE5[[:alnum:]+/_=-]{3,}' \
+            -- . >"$matches"; then
+            echo "Sensitive-looking values found:" >&2
+            cat "$matches" >&2
+            exit 1
+          else
+            status=$?
+            if [ "$status" -ne 1 ]; then
+              echo "sensitive-value scan failed with status $status" >&2
+              exit "$status"
+            fi
+          fi
+
+          echo "No sensitive-looking values found"

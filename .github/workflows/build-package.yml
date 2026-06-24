@@ -1,0 +1,93 @@
+name: Build Package
+
+on:
+  workflow_dispatch:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  package-layout:
+    name: Package layout
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate package layout
+        run: |
+          set -euo pipefail
+          mkdir -p dist logs
+
+          {
+            echo "== required files =="
+            test -f Makefile
+            test -f root/etc/config/wrtbak
+            test -f root/usr/bin/wrtbak
+            test -d root/usr/lib/wrtbak
+            test -f root/usr/lib/wrtbak/backup.sh
+            test -f root/usr/lib/wrtbak/common.sh
+            test -f root/usr/lib/wrtbak/manifest.sh
+            test -f root/usr/lib/wrtbak/pack.sh
+            test -f root/usr/lib/wrtbak/paths.default
+            test -f tests/test_cli_fixture.sh
+
+            echo "== root payload =="
+            find root -type f | sort
+
+            echo "== shell syntax =="
+            for script in root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/test_cli_fixture.sh; do
+              sh -n "$script"
+            done
+
+            echo "== example manifests =="
+            for manifest in examples/*/manifest.json; do
+              python3 -m json.tool "$manifest" >/dev/null
+              echo "$manifest"
+            done
+
+            echo "== fixture test =="
+            sh tests/test_cli_fixture.sh
+          } 2>&1 | tee logs/package-layout.log
+
+      - name: Create package source artifact
+        run: |
+          set -euo pipefail
+          mkdir -p dist logs
+
+          git archive --format=tar --prefix=luci-app-wrtbak/ HEAD \
+            | gzip -n > dist/luci-app-wrtbak-package-source.tar.gz
+
+          sha256sum dist/luci-app-wrtbak-package-source.tar.gz \
+            | tee logs/luci-app-wrtbak-package-source.sha256
+
+          tar tzf dist/luci-app-wrtbak-package-source.tar.gz \
+            | tee logs/luci-app-wrtbak-package-source.contents.txt >/dev/null
+
+      - name: Upload package source
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-wrtbak-package-source
+          path: dist/luci-app-wrtbak-package-source.tar.gz
+          if-no-files-found: error
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-wrtbak-logs
+          path: logs/
+          if-no-files-found: error
+
+  openwrt-sdk-build:
+    name: OpenWrt SDK build (experimental TODO)
+    runs-on: ubuntu-latest
+    needs: package-layout
+    if: ${{ false }}
+
+    steps:
+      - name: Reserved for real SDK build
+        run: |
+          echo "TODO: enable a real OpenWrt SDK or package-builder job after selecting the release, target, and feed integration strategy."

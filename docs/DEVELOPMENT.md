@@ -9,6 +9,10 @@ This repository contains the public documentation, non-secret examples, and the 
 ├── README.md
 ├── LICENSE
 ├── Makefile
+├── .github/
+│   └── workflows/
+│       ├── build-package.yml
+│       └── lint.yml
 ├── docs/
 │   ├── BACKUP_FORMAT.md
 │   ├── DEVELOPMENT.md
@@ -81,6 +85,76 @@ Run the local fixture test:
 ```sh
 sh tests/test_cli_fixture.sh
 ```
+
+## Local Lint Workflow
+
+The GitHub Actions lint workflow is intentionally reproducible with local commands.
+
+Check shell syntax:
+
+```sh
+sh -n root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/test_cli_fixture.sh
+for script in root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/test_cli_fixture.sh; do
+  sh -n "$script"
+done
+```
+
+If BusyBox is installed, also check with `ash`:
+
+```sh
+if command -v busybox >/dev/null 2>&1; then
+  busybox ash -n root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/test_cli_fixture.sh
+  for script in root/usr/bin/wrtbak root/usr/lib/wrtbak/*.sh tests/test_cli_fixture.sh; do
+    busybox ash -n "$script"
+  done
+fi
+```
+
+Validate all example manifests:
+
+```sh
+for manifest in examples/*/manifest.json; do
+  python3 -m json.tool "$manifest" >/dev/null
+done
+```
+
+Run the fixture test:
+
+```sh
+sh tests/test_cli_fixture.sh
+```
+
+Scan for sensitive-looking values:
+
+```sh
+matches=$(mktemp)
+if git grep -nIE \
+  -e 'BEGIN[[:space:]]+OPENSSH' \
+  -e 'PRIVATE[[:space:]]+KEY' \
+  -e '(^|[^[:alnum:]_])hskey-[[:alnum:]_-]{8,}' \
+  -e '(^|[^[:alnum:]_])tskey-[[:alnum:]_-]{8,}' \
+  -e '(^|[^[:alnum:]_])(token|password)[[:space:]]*=[[:space:]]*[^[:space:];#<>]{4,}' \
+  -e 'AAAAC3NzaC1lZDI1NTE5[[:alnum:]+/_=-]{3,}' \
+  -- . >"$matches"; then
+  cat "$matches" >&2
+  exit 1
+else
+  status=$?
+  rm -f "$matches"
+  test "$status" -eq 1
+fi
+```
+
+## GitHub Actions Artifacts
+
+`build-package.yml` currently runs a reliable `package-layout` job rather than pretending to produce installable OpenWrt packages before the SDK target and feed integration are finalized.
+
+The workflow uploads:
+
+- `luci-app-wrtbak-package-source`: a `git archive` source tarball for the package repository.
+- `luci-app-wrtbak-logs`: package layout logs, source checksum, and source archive contents.
+
+Future SDK or package-builder work should replace the experimental TODO job with a real build and upload `luci-app-wrtbak-ipk` and/or `luci-app-wrtbak-apk` artifacts.
 
 ## Security Notes
 
