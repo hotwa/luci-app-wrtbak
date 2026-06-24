@@ -2,6 +2,22 @@ name: Build Package
 
 on:
   workflow_dispatch:
+    inputs:
+      arch:
+        description: OpenWrt SDK architecture or arch-release tag.
+        default: aarch64_cortex-a53
+        required: false
+        type: string
+      packages:
+        description: Space-separated package list to build.
+        default: luci-app-wrtbak
+        required: false
+        type: string
+      container:
+        description: SDK container repository.
+        default: openwrt/sdk
+        required: false
+        type: string
   push:
 
 permissions:
@@ -82,12 +98,63 @@ jobs:
           if-no-files-found: error
 
   openwrt-sdk-build:
-    name: OpenWrt SDK build (experimental TODO)
+    name: OpenWrt SDK build (${{ inputs.arch || 'aarch64_cortex-a53' }})
     runs-on: ubuntu-latest
     needs: package-layout
-    if: ${{ false }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
 
     steps:
-      - name: Reserved for real SDK build
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Prepare SDK feed
         run: |
-          echo "TODO: enable a real OpenWrt SDK or package-builder job after selecting the release, target, and feed integration strategy."
+          set -euo pipefail
+          mkdir -p .sdk-feed/luci-app-wrtbak sdk-artifacts
+          tar \
+            --exclude=.git \
+            --exclude=.github \
+            --exclude=.sdk-feed \
+            --exclude=sdk-artifacts \
+            -cf - . \
+            | tar -C .sdk-feed/luci-app-wrtbak -xf -
+
+      - name: Build installable packages
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ inputs.arch || 'aarch64_cortex-a53' }}
+          ARTIFACTS_DIR: ${{ github.workspace }}/sdk-artifacts
+          BUILD_LOG: 1
+          CONTAINER: ${{ inputs.container || 'openwrt/sdk' }}
+          FEED_DIR: ${{ github.workspace }}/.sdk-feed
+          FEEDNAME: wrtbak
+          INDEX: 1
+          PACKAGES: ${{ inputs.packages || 'luci-app-wrtbak' }}
+          V: s
+
+      - name: List SDK artifacts
+        run: |
+          set -euo pipefail
+          find sdk-artifacts -type f | sort
+          find sdk-artifacts -type f \( -name '*.ipk' -o -name '*.apk' \) | grep -q .
+
+      - name: Upload SDK packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-wrtbak-sdk-${{ inputs.arch || 'aarch64_cortex-a53' }}
+          path: |
+            sdk-artifacts/bin/packages/**/*.ipk
+            sdk-artifacts/bin/packages/**/*.apk
+            sdk-artifacts/bin/packages/**/Packages*
+            sdk-artifacts/bin/packages/**/APKINDEX*
+          if-no-files-found: error
+
+      - name: Upload SDK logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-wrtbak-sdk-logs-${{ inputs.arch || 'aarch64_cortex-a53' }}
+          path: |
+            sdk-artifacts/logs/
+            sdk-artifacts/bin/packages/
+          if-no-files-found: warn

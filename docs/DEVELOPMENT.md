@@ -147,14 +147,25 @@ fi
 
 ## GitHub Actions Artifacts
 
-`build-package.yml` currently runs a reliable `package-layout` job rather than pretending to produce installable OpenWrt packages before the SDK target and feed integration are finalized.
+`build-package.yml` always runs a reliable `package-layout` job. On manual `workflow_dispatch`, it also runs an OpenWrt SDK build through the official `openwrt/gh-action-sdk` action.
 
-The workflow uploads:
+The layout job uploads:
 
 - `luci-app-wrtbak-package-source`: a `git archive` source tarball for the package repository.
 - `luci-app-wrtbak-logs`: package layout logs, source checksum, and source archive contents.
 
-Future SDK or package-builder work should replace the experimental TODO job with a real build and upload `luci-app-wrtbak-ipk` and/or `luci-app-wrtbak-apk` artifacts.
+The SDK job is manual so normal documentation pushes stay cheap. Default inputs are:
+
+- `arch`: `aarch64_cortex-a53`
+- `packages`: `luci-app-wrtbak`
+- `container`: `openwrt/sdk`
+
+The package repository keeps its OpenWrt `Makefile` at the repository root so `hotwa/OpenWRT-CI` can clone it directly into `wrt/package/luci-app-wrtbak`. The SDK workflow stages a temporary feed at `.sdk-feed/luci-app-wrtbak/` before invoking `openwrt/gh-action-sdk`, because OpenWrt feeds expect packages in subdirectories.
+
+The SDK job uploads:
+
+- `luci-app-wrtbak-sdk-<arch>`: installable `.ipk` and/or `.apk` packages plus generated package indexes.
+- `luci-app-wrtbak-sdk-logs-<arch>`: SDK build logs and package feed metadata.
 
 ## Security Notes
 
