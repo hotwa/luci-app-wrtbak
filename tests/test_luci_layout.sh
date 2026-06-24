@@ -33,5 +33,8 @@ grep -Fq "Download" "$view_file"
 grep -Fq "handleSaveApply: null" "$view_file"
 grep -Fq "handleSave: null" "$view_file"
 grep -Fq "handleReset: null" "$view_file"
+grep -Fq "id: 'wrtbak-profile'" "$view_file"
+grep -Fq "name: 'wrtbak_profile'" "$view_file"
+grep -Fq "[A-Za-z0-9._\\\\-]+" "$view_file"
 
 echo "LuCI layout test passed"

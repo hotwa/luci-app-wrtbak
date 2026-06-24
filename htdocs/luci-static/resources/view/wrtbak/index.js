@@ -119,17 +119,27 @@ return view.extend({
 	render: function(data) {
 		var items = Array.isArray(data.items) ? data.items : [];
 		var profile = E('input', {
+			id: 'wrtbak-profile',
+			name: 'wrtbak_profile',
 			'class': 'cbi-input-text',
 			type: 'text',
 			value: L.env.hostname || 'openwrt',
 			maxlength: 64,
-			pattern: '[A-Za-z0-9._-]+'
+			pattern: '[A-Za-z0-9._\\-]+'
 		});
-		var format = E('select', { 'class': 'cbi-input-select' }, [
+		var format = E('select', {
+			id: 'wrtbak-format',
+			name: 'wrtbak_format',
+			'class': 'cbi-input-select'
+		}, [
 			E('option', { value: 'wrtbak' }, '.wrtbak'),
 			E('option', { value: 'sysupgrade' }, '.sysupgrade.tar.gz')
 		]);
-		var pageSize = E('select', { 'class': 'cbi-input-select' }, [
+		var pageSize = E('select', {
+			id: 'wrtbak-page-size',
+			name: 'wrtbak_page_size',
+			'class': 'cbi-input-select'
+		}, [
 			E('option', { value: '10' }, '10'),
 			E('option', { value: '20' }, '20'),
 			E('option', { value: '50' }, '50'),
@@ -237,15 +247,15 @@ return view.extend({
 			E('h2', {}, _('Wrtbak')),
 			E('div', { 'class': 'cbi-section' }, [
 				E('div', { 'class': 'cbi-value' }, [
-					E('label', { 'class': 'cbi-value-title' }, _('Profile')),
+					E('label', { 'class': 'cbi-value-title', 'for': 'wrtbak-profile' }, _('Profile')),
 					E('div', { 'class': 'cbi-value-field' }, profile)
 				]),
 				E('div', { 'class': 'cbi-value' }, [
-					E('label', { 'class': 'cbi-value-title' }, _('Archive')),
+					E('label', { 'class': 'cbi-value-title', 'for': 'wrtbak-format' }, _('Archive')),
 					E('div', { 'class': 'cbi-value-field' }, format)
 				]),
 				E('div', { 'class': 'cbi-value' }, [
-					E('label', { 'class': 'cbi-value-title' }, _('Rows per page')),
+					E('label', { 'class': 'cbi-value-title', 'for': 'wrtbak-page-size' }, _('Rows per page')),
 					E('div', { 'class': 'cbi-value-field' }, [
 						pageSize,
 						' ',
