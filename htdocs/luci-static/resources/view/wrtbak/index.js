@@ -108,6 +108,10 @@ function showDownloadResult(container, result) {
 }
 
 return view.extend({
+	handleSaveApply: null,
+	handleSave: null,
+	handleReset: null,
+
 	load: function() {
 		return fs.exec('/usr/bin/wrtbak', [ 'detect', '--json' ]).then(parseJsonOutput);
 	},

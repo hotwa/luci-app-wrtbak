@@ -30,5 +30,8 @@ grep -Fq "Previous" "$view_file"
 grep -Fq "Next" "$view_file"
 grep -Fq "showDownloadResult" "$view_file"
 grep -Fq "Download" "$view_file"
+grep -Fq "handleSaveApply: null" "$view_file"
+grep -Fq "handleSave: null" "$view_file"
+grep -Fq "handleReset: null" "$view_file"
 
 echo "LuCI layout test passed"
