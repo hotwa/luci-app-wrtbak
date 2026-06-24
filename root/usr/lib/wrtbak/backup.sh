@@ -98,35 +98,35 @@ wrtbak_collect_file_entry() {
 }
 
 wrtbak_collect_directory() {
-	wrtbak_target_path=$1
-	wrtbak_source_dir=$2
-	wrtbak_stage=$3
-	wrtbak_inventory=$4
-	wrtbak_seen=$5
-	wrtbak_work=$6
-	wrtbak_dirs="$wrtbak_work/dirs.list"
-	wrtbak_files="$wrtbak_work/files.list"
+	wrtbak_collect_dir_target=$1
+	wrtbak_collect_dir_source=$2
+	wrtbak_collect_dir_stage=$3
+	wrtbak_collect_dir_inventory=$4
+	wrtbak_collect_dir_seen=$5
+	wrtbak_collect_dir_work=$6
+	wrtbak_collect_dir_dirs="$wrtbak_collect_dir_work/dirs.list"
+	wrtbak_collect_dir_files="$wrtbak_collect_dir_work/files.list"
 
-	(cd "$wrtbak_source_dir" && find . -type d -print | sort) > "$wrtbak_dirs" || wrtbak_die "cannot scan $wrtbak_source_dir"
-	while IFS= read -r wrtbak_rel; do
-		if [ "$wrtbak_rel" = "." ]; then
-			wrtbak_child_target=${wrtbak_target_path%/}
-			wrtbak_child_source=$wrtbak_source_dir
+	(cd "$wrtbak_collect_dir_source" && find . -type d -print | sort) > "$wrtbak_collect_dir_dirs" || wrtbak_die "cannot scan $wrtbak_collect_dir_source"
+	while IFS= read -r wrtbak_collect_dir_rel; do
+		if [ "$wrtbak_collect_dir_rel" = "." ]; then
+			wrtbak_collect_dir_child_target=${wrtbak_collect_dir_target%/}
+			wrtbak_collect_dir_child_source=$wrtbak_collect_dir_source
 		else
-			wrtbak_child_rel=${wrtbak_rel#./}
-			wrtbak_child_target="${wrtbak_target_path%/}/$wrtbak_child_rel"
-			wrtbak_child_source="$wrtbak_source_dir/$wrtbak_child_rel"
+			wrtbak_collect_dir_child_rel=${wrtbak_collect_dir_rel#./}
+			wrtbak_collect_dir_child_target="${wrtbak_collect_dir_target%/}/$wrtbak_collect_dir_child_rel"
+			wrtbak_collect_dir_child_source="$wrtbak_collect_dir_source/$wrtbak_collect_dir_child_rel"
 		fi
-		wrtbak_collect_directory_entry "$wrtbak_child_target" "$wrtbak_child_source" "$wrtbak_stage" "$wrtbak_inventory" "$wrtbak_seen"
-	done < "$wrtbak_dirs"
+		wrtbak_collect_directory_entry "$wrtbak_collect_dir_child_target" "$wrtbak_collect_dir_child_source" "$wrtbak_collect_dir_stage" "$wrtbak_collect_dir_inventory" "$wrtbak_collect_dir_seen"
+	done < "$wrtbak_collect_dir_dirs"
 
-	(cd "$wrtbak_source_dir" && find . -type f -print | sort) > "$wrtbak_files" || wrtbak_die "cannot scan $wrtbak_source_dir"
-	while IFS= read -r wrtbak_rel; do
-		wrtbak_child_rel=${wrtbak_rel#./}
-		wrtbak_child_target="${wrtbak_target_path%/}/$wrtbak_child_rel"
-		wrtbak_child_source="$wrtbak_source_dir/$wrtbak_child_rel"
-		wrtbak_collect_file_entry "$wrtbak_child_target" "$wrtbak_child_source" "$wrtbak_stage" "$wrtbak_inventory" "$wrtbak_seen"
-	done < "$wrtbak_files"
+	(cd "$wrtbak_collect_dir_source" && find . -type f -print | sort) > "$wrtbak_collect_dir_files" || wrtbak_die "cannot scan $wrtbak_collect_dir_source"
+	while IFS= read -r wrtbak_collect_dir_rel; do
+		wrtbak_collect_dir_child_rel=${wrtbak_collect_dir_rel#./}
+		wrtbak_collect_dir_child_target="${wrtbak_collect_dir_target%/}/$wrtbak_collect_dir_child_rel"
+		wrtbak_collect_dir_child_source="$wrtbak_collect_dir_source/$wrtbak_collect_dir_child_rel"
+		wrtbak_collect_file_entry "$wrtbak_collect_dir_child_target" "$wrtbak_collect_dir_child_source" "$wrtbak_collect_dir_stage" "$wrtbak_collect_dir_inventory" "$wrtbak_collect_dir_seen"
+	done < "$wrtbak_collect_dir_files"
 }
 
 wrtbak_collect_path() {

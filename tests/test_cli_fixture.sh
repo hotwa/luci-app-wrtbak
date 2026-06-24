@@ -18,6 +18,8 @@ trap cleanup EXIT HUP INT TERM
 mkdir -p \
 	"$fixture_root/etc/config" \
 	"$fixture_root/etc/dropbear" \
+	"$fixture_root/etc/nikki/nftables" \
+	"$fixture_root/etc/nikki/profiles" \
 	"$work_dir"
 
 cat >"$fixture_root/etc/config/system" <<'EOT'
@@ -36,6 +38,14 @@ cat >"$fixture_root/etc/dropbear/authorized_keys" <<'EOT'
 placeholder-authorized-key-for-tests
 EOT
 
+cat >"$fixture_root/etc/nikki/nftables/geoip_cn.nft" <<'EOT'
+table inet nikki_geoip {}
+EOT
+
+cat >"$fixture_root/etc/nikki/profiles/default.yaml" <<'EOT'
+profile: placeholder
+EOT
+
 chmod 600 "$fixture_root/etc/config/system" "$fixture_root/etc/dropbear/authorized_keys"
 chmod 644 "$fixture_root/etc/config/network"
 
@@ -43,6 +53,7 @@ cat >"$paths_file" <<'EOT'
 /etc/config/system
 /etc/config/network
 /etc/dropbear/authorized_keys
+/etc/nikki
 /etc/config/not-present
 EOT
 
@@ -72,6 +83,12 @@ grep -q '^README.txt$' "$work_dir/wrtbak.list"
 grep -q '^rootfs/etc/config/system$' "$work_dir/wrtbak.list"
 grep -q '^rootfs/etc/config/network$' "$work_dir/wrtbak.list"
 grep -q '^rootfs/etc/dropbear/authorized_keys$' "$work_dir/wrtbak.list"
+grep -q '^rootfs/etc/nikki/nftables/geoip_cn.nft$' "$work_dir/wrtbak.list"
+grep -q '^rootfs/etc/nikki/profiles/default.yaml$' "$work_dir/wrtbak.list"
+if grep -q '^rootfs/etc/nikki/nftables/profiles' "$work_dir/wrtbak.list"; then
+	echo "directory traversal reused a clobbered parent path" >&2
+	exit 1
+fi
 
 tar xOzf "$archive" manifest.json | python3 -m json.tool >"$work_dir/manifest.pretty.json"
 
