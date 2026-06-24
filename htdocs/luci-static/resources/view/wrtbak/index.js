@@ -39,10 +39,22 @@ function itemBadges(item) {
 }
 
 function downloadFile(path, filename) {
+	var targetName = 'wrtbak-download-frame';
+	var frame = document.querySelector('iframe[name="' + targetName + '"]');
+
+	if (!frame) {
+		frame = E('iframe', {
+			name: targetName,
+			style: 'display:none'
+		});
+		document.body.appendChild(frame);
+	}
+
 	var form = E('form', {
 		method: 'post',
 		action: L.env.cgi_base + '/cgi-download',
 		enctype: 'application/x-www-form-urlencoded',
+		target: targetName,
 		style: 'display:none'
 	}, [
 		E('input', { type: 'hidden', name: 'sessionid', value: rpc.getSessionID() }),
