@@ -1,0 +1,25 @@
+{
+  "schema": "wrtbak.manifest.v1",
+  "profile": "office-ax6600",
+  "backup_id": "example-office-ax6600-20260624T000000Z",
+  "created_at": "2026-06-24T00:00:00Z",
+  "tool_version": "0.1.0",
+  "device": {
+    "hostname": "office-router",
+    "model": "Xiaomi AX6600",
+    "target": "qualcommax/ipq807x"
+  },
+  "firmware": {
+    "distribution": "OpenWrt",
+    "version": "23.05.5",
+    "revision": "example",
+    "kernel": "5.15"
+  },
+  "restore": {
+    "mode": "review-required",
+    "allow_cross_device": false,
+    "notes": "Example manifest only. Contains no real configuration or secrets."
+  },
+  "files": []
+}
+

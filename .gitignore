@@ -1,0 +1,14 @@
+# Backup and restore archives
+*.wrtbak
+*.sysupgrade.tar.gz
+
+# OpenWrt package outputs
+*.ipk
+*.apk
+
+# OpenWrt build outputs
+/bin/
+/build_dir/
+/staging_dir/
+/.tmp/
+
