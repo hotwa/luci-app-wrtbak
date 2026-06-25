@@ -15,8 +15,10 @@ This repository contains the public documentation, non-secret examples, and the 
 │       └── lint.yml
 ├── docs/
 │   ├── BACKUP_FORMAT.md
+│   ├── AGENT_MAINTENANCE.md
 │   ├── DEVELOPMENT.md
 │   ├── OPENWRT_CI_INTEGRATION.md
+│   ├── superpowers/plans/
 │   └── ROADMAP.md
 ├── root/
 │   ├── etc/config/wrtbak
@@ -26,6 +28,7 @@ This repository contains the public documentation, non-secret examples, and the 
 │       ├── bin/wrtbak
 │       └── lib/wrtbak/
 │           ├── backup.sh
+│           ├── agent.sh
 │           ├── common.sh
 │           ├── items.sh
 │           ├── manifest.sh
@@ -37,6 +40,9 @@ This repository contains the public documentation, non-secret examples, and the 
 ├── tests/
 │   ├── test_cli_fixture.sh
 │   ├── test_detect_fixture.sh
+│   ├── test_agent_plan_fixture.sh
+│   ├── test_agent_status_fixture.sh
+│   ├── test_restore_plan_fixture.sh
 │   ├── test_luci_layout.sh
 │   └── test_web_create_fixture.sh
 └── examples/
@@ -48,7 +54,7 @@ This repository contains the public documentation, non-secret examples, and the 
         └── manifest.json
 ```
 
-The current package provides a shell CLI for archive creation, inspection, installed package detection, selected-item archive generation, LuCI-triggered downloads, and `.sysupgrade.tar.gz` export. Restore flows are intentionally not implemented yet.
+The current package provides a shell CLI for archive creation, inspection, installed package detection, selected-item archive generation, LuCI-triggered downloads, `.sysupgrade.tar.gz` export, and read-only agent maintenance planning. Restore planning exists, but automatic restore writes are intentionally not implemented yet.
 
 ## Runtime Assumptions
 
@@ -58,6 +64,7 @@ The CLI currently expects standard OpenWrt/BusyBox tools to be available:
 - `sha256sum` for regular file digests.
 - `stat -c` for file mode and size metadata.
 - `find`, `sort`, `awk`, `sed`, and `grep`.
+- `jsonfilter` for OpenWrt metadata lookup and strict `restore-plan` manifest validation.
 
 The package `Makefile` does not add explicit `tar` or `gzip` dependencies because OpenWrt package names vary by build profile and BusyBox configuration. Ensure target images include working tar/gzip support before relying on archive creation or export.
 
@@ -132,7 +139,9 @@ done
 Run the fixture test:
 
 ```sh
-sh tests/test_cli_fixture.sh
+for test_script in tests/*.sh; do
+  sh "$test_script"
+done
 ```
 
 Scan for sensitive-looking values:
