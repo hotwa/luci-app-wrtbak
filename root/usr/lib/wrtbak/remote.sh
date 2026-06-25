@@ -223,6 +223,236 @@ wrtbak_remote_secret_json() {
 	fi
 }
 
+wrtbak_remote_error_json() {
+	wrtbak_operation=$1
+	wrtbak_target=$2
+	wrtbak_code=$3
+	wrtbak_message=$4
+	wrtbak_detail=${5:-}
+
+	printf '{\n'
+	printf '  "ok": false,\n'
+	printf '  "operation": '; wrtbak_json_string "$wrtbak_operation"; printf ',\n'
+	printf '  "target": '; wrtbak_json_string "$wrtbak_target"; printf ',\n'
+	printf '  "code": '; wrtbak_json_string "$wrtbak_code"; printf ',\n'
+	printf '  "message": '; wrtbak_json_string "$wrtbak_message"; printf ',\n'
+	printf '  "detail": '; wrtbak_json_string "$wrtbak_detail"; printf '\n'
+	printf '}\n'
+}
+
+wrtbak_remote_resolve_target() {
+	wrtbak_target=$1
+	if [ "$wrtbak_target" = "default" ]; then
+		wrtbak_target=$(wrtbak_main_option default_target webdav)
+	fi
+	case "$wrtbak_target" in
+		webdav|s3)
+			printf '%s\n' "$wrtbak_target"
+			return 0
+			;;
+	esac
+	return 1
+}
+
+wrtbak_remote_load_webdav_config() {
+	wrtbak_remote_webdav_enabled=$(wrtbak_remote_option webdav enabled 0)
+	wrtbak_remote_webdav_driver=$(wrtbak_remote_option webdav driver curl)
+	wrtbak_remote_webdav_url=$(wrtbak_remote_option webdav url "")
+	wrtbak_remote_webdav_username=$(wrtbak_remote_option webdav username "")
+	wrtbak_remote_webdav_password=$(wrtbak_remote_option webdav password "")
+	wrtbak_remote_webdav_path=$(wrtbak_normalize_remote_path "$(wrtbak_remote_option webdav path "")") || return 1
+
+	[ "$wrtbak_remote_webdav_driver" = "curl" ] || return 1
+	[ -n "$wrtbak_remote_webdav_url" ] || return 1
+	[ -n "$wrtbak_remote_webdav_username" ] || return 1
+	[ -n "$wrtbak_remote_webdav_password" ] || return 1
+	return 0
+}
+
+wrtbak_remote_load_s3_config() {
+	wrtbak_remote_s3_enabled=$(wrtbak_remote_option s3 enabled 0)
+	wrtbak_remote_s3_driver=$(wrtbak_remote_option s3 driver rclone)
+	wrtbak_remote_s3_endpoint=$(wrtbak_remote_option s3 endpoint "")
+	wrtbak_remote_s3_region=$(wrtbak_remote_option s3 region us-east-1)
+	wrtbak_remote_s3_bucket=$(wrtbak_remote_option s3 bucket "")
+	wrtbak_remote_s3_access_key=$(wrtbak_remote_option s3 access_key "")
+	wrtbak_remote_s3_secret_key=$(wrtbak_remote_option s3 secret_key "")
+	wrtbak_remote_s3_path=$(wrtbak_normalize_remote_path "$(wrtbak_remote_option s3 path "")") || return 1
+	wrtbak_remote_s3_force_path_style=$(wrtbak_remote_option s3 force_path_style 1)
+
+	[ "$wrtbak_remote_s3_driver" = "rclone" ] || return 1
+	[ -n "$wrtbak_remote_s3_endpoint" ] || return 1
+	[ -n "$wrtbak_remote_s3_bucket" ] || return 1
+	[ -n "$wrtbak_remote_s3_access_key" ] || return 1
+	[ -n "$wrtbak_remote_s3_secret_key" ] || return 1
+	return 0
+}
+
+wrtbak_remote_require_enabled() {
+	wrtbak_target=$1
+	if ! wrtbak_bool_enabled "$(wrtbak_remote_option "$wrtbak_target" enabled 0)"; then
+		wrtbak_remote_error_json "$2" "$wrtbak_target" target_disabled "$wrtbak_target remote target is disabled" ""
+		return 1
+	fi
+	return 0
+}
+
+wrtbak_remote_require_dependency() {
+	wrtbak_dependency=$1
+	wrtbak_operation=$2
+	wrtbak_target=$3
+	if ! command -v "$wrtbak_dependency" >/dev/null 2>&1; then
+		wrtbak_remote_error_json "$wrtbak_operation" "$wrtbak_target" missing_dependency "$wrtbak_dependency is not installed" ""
+		return 1
+	fi
+	return 0
+}
+
+wrtbak_remote_test() {
+	wrtbak_target=$(wrtbak_remote_resolve_target "$1") || {
+		wrtbak_remote_error_json remote-test "$1" invalid_config "unknown remote target" ""
+		return 1
+	}
+
+	case "$wrtbak_target" in
+		webdav)
+			if ! wrtbak_remote_load_webdav_config; then
+				wrtbak_remote_error_json remote-test "$wrtbak_target" invalid_config "WebDAV target is incomplete" ""
+				return 1
+			fi
+			wrtbak_remote_require_dependency curl remote-test "$wrtbak_target" || return 1
+			wrtbak_device_id=$(wrtbak_effective_device_id)
+			wrtbak_remote_path=$(wrtbak_webdav_probe "$wrtbak_remote_webdav_url" "$wrtbak_remote_webdav_username" "$wrtbak_remote_webdav_password" "$wrtbak_remote_webdav_path" "$wrtbak_device_id") || {
+				wrtbak_remote_error_json remote-test "$wrtbak_target" command_failed "WebDAV probe failed" ""
+				return 1
+			}
+			printf '{\n'
+			printf '  "ok": true,\n'
+			printf '  "operation": "remote-test",\n'
+			printf '  "target": "webdav",\n'
+			printf '  "driver": "curl",\n'
+			printf '  "remote_path": '; wrtbak_json_string "$wrtbak_remote_path"; printf '\n'
+			printf '}\n'
+			;;
+		s3)
+			if ! wrtbak_remote_load_s3_config; then
+				wrtbak_remote_error_json remote-test "$wrtbak_target" invalid_config "S3 target is incomplete" ""
+				return 1
+			fi
+			wrtbak_remote_require_dependency rclone remote-test "$wrtbak_target" || return 1
+			wrtbak_device_id=$(wrtbak_effective_device_id)
+			wrtbak_remote_path=$(wrtbak_s3_probe "$wrtbak_remote_s3_endpoint" "$wrtbak_remote_s3_region" "$wrtbak_remote_s3_bucket" "$wrtbak_remote_s3_access_key" "$wrtbak_remote_s3_secret_key" "$wrtbak_remote_s3_path" "$wrtbak_remote_s3_force_path_style" "$wrtbak_device_id") || {
+				wrtbak_remote_error_json remote-test "$wrtbak_target" command_failed "S3 probe failed" ""
+				return 1
+			}
+			printf '{\n'
+			printf '  "ok": true,\n'
+			printf '  "operation": "remote-test",\n'
+			printf '  "target": "s3",\n'
+			printf '  "driver": "rclone",\n'
+			printf '  "remote_path": '; wrtbak_json_string "$wrtbak_remote_path"; printf '\n'
+			printf '}\n'
+			;;
+		*)
+			wrtbak_remote_error_json remote-test "$wrtbak_target" invalid_config "unknown remote target" ""
+			return 1
+			;;
+	esac
+}
+
+wrtbak_remote_list_emit_json() {
+	wrtbak_target=$1
+	wrtbak_driver=$2
+	wrtbak_tsv=$3
+	printf '{\n'
+	printf '  "ok": true,\n'
+	printf '  "operation": "remote-list",\n'
+	printf '  "target": '; wrtbak_json_string "$wrtbak_target"; printf ',\n'
+	printf '  "driver": '; wrtbak_json_string "$wrtbak_driver"; printf ',\n'
+	printf '  "backups": [\n'
+	wrtbak_first=1
+	while IFS='	' read -r wrtbak_path wrtbak_filename wrtbak_format wrtbak_size wrtbak_modified || [ -n "$wrtbak_path" ]; do
+		[ -n "$wrtbak_path" ] || continue
+		if [ "$wrtbak_first" -eq 1 ]; then
+			wrtbak_first=0
+		else
+			printf ',\n'
+		fi
+		printf '    {\n'
+		printf '      "path": '; wrtbak_json_string "$wrtbak_path"; printf ',\n'
+		printf '      "filename": '; wrtbak_json_string "$wrtbak_filename"; printf ',\n'
+		printf '      "format": '; wrtbak_json_string "$wrtbak_format"; printf ',\n'
+		printf '      "size": '
+		case "$wrtbak_size" in
+			""|*[!0-9]*)
+				printf 'null'
+				;;
+			*)
+				printf '%s' "$wrtbak_size"
+				;;
+		esac
+		printf ',\n'
+		printf '      "modified": '; wrtbak_json_string "$wrtbak_modified"; printf '\n'
+		printf '    }'
+	done < "$wrtbak_tsv"
+	printf '\n'
+	printf '  ]\n'
+	printf '}\n'
+}
+
+wrtbak_remote_list() {
+	wrtbak_target=$(wrtbak_remote_resolve_target "$1") || {
+		wrtbak_remote_error_json remote-list "$1" invalid_config "unknown remote target" ""
+		return 1
+	}
+	wrtbak_remote_require_enabled "$wrtbak_target" remote-list || return 1
+
+	case "$wrtbak_target" in
+		webdav)
+			if ! wrtbak_remote_load_webdav_config; then
+				wrtbak_remote_error_json remote-list "$wrtbak_target" invalid_config "WebDAV target is incomplete" ""
+				return 1
+			fi
+			wrtbak_remote_require_dependency curl remote-list "$wrtbak_target" || return 1
+			wrtbak_device_id=$(wrtbak_effective_device_id)
+			wrtbak_tsv=$(mktemp "${TMPDIR:-/tmp}/wrtbak-webdav-list.XXXXXX") || {
+				wrtbak_remote_error_json remote-list "$wrtbak_target" command_failed "cannot create temporary file" ""
+				return 1
+			}
+			if ! wrtbak_webdav_list_raw "$wrtbak_remote_webdav_url" "$wrtbak_remote_webdav_username" "$wrtbak_remote_webdav_password" "$wrtbak_remote_webdav_path" "$wrtbak_device_id" > "$wrtbak_tsv"; then
+				rm -f "$wrtbak_tsv"
+				wrtbak_remote_error_json remote-list "$wrtbak_target" unsupported_list "WebDAV listing failed" ""
+				return 1
+			fi
+			wrtbak_remote_list_emit_json "$wrtbak_target" curl "$wrtbak_tsv"
+			rm -f "$wrtbak_tsv"
+			;;
+		s3)
+			if ! wrtbak_remote_load_s3_config; then
+				wrtbak_remote_error_json remote-list "$wrtbak_target" invalid_config "S3 target is incomplete" ""
+				return 1
+			fi
+			wrtbak_remote_require_dependency rclone remote-list "$wrtbak_target" || return 1
+			wrtbak_device_id=$(wrtbak_effective_device_id)
+			wrtbak_tsv=$(mktemp "${TMPDIR:-/tmp}/wrtbak-s3-list.XXXXXX") || {
+				wrtbak_remote_error_json remote-list "$wrtbak_target" command_failed "cannot create temporary file" ""
+				return 1
+			}
+			if ! wrtbak_s3_list_raw "$wrtbak_remote_s3_endpoint" "$wrtbak_remote_s3_region" "$wrtbak_remote_s3_bucket" "$wrtbak_remote_s3_access_key" "$wrtbak_remote_s3_secret_key" "$wrtbak_remote_s3_path" "$wrtbak_remote_s3_force_path_style" "$wrtbak_device_id" > "$wrtbak_tsv"; then
+				rm -f "$wrtbak_tsv"
+				wrtbak_remote_error_json remote-list "$wrtbak_target" command_failed "S3 listing failed" ""
+				return 1
+			fi
+			wrtbak_remote_list_emit_json "$wrtbak_target" rclone "$wrtbak_tsv"
+			rm -f "$wrtbak_tsv"
+			;;
+		*)
+			wrtbak_remote_error_json remote-list "$wrtbak_target" invalid_config "unknown remote target" ""
+			return 1
+			;;
+	esac
+}
+
 wrtbak_remote_status_target_json() {
 	wrtbak_target=$1
 	wrtbak_enabled=$(wrtbak_remote_option "$wrtbak_target" enabled 0)

@@ -25,6 +25,8 @@ fi
 . "$WRTBAK_LIBDIR/agent.sh"
 . "$WRTBAK_LIBDIR/config.sh"
 . "$WRTBAK_LIBDIR/remote.sh"
+. "$WRTBAK_LIBDIR/remote_webdav.sh"
+. "$WRTBAK_LIBDIR/remote_s3.sh"
 
 wrtbak_usage() {
 	cat <<'EOF'
@@ -33,6 +35,8 @@ Usage:
   wrtbak status --json
   wrtbak doctor --json
   wrtbak remote-status --json
+  wrtbak remote-test --target webdav|s3 --json
+  wrtbak remote-list --target default|webdav|s3 --json
   wrtbak detect [--json]
   wrtbak plan --profile NAME --items IDS --format wrtbak|sysupgrade --json
   wrtbak restore-plan --input FILE --json
@@ -151,6 +155,43 @@ wrtbak_parse_remote_status() {
 	done
 
 	wrtbak_remote_status_json
+}
+
+wrtbak_parse_remote_target_json_only() {
+	wrtbak_remote_command=$1
+	shift
+	wrtbak_target=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown $wrtbak_remote_command argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_target" ] || wrtbak_die "--target is required"
+
+	case "$wrtbak_remote_command" in
+		remote-test)
+			wrtbak_remote_test "$wrtbak_target"
+			;;
+		remote-list)
+			wrtbak_remote_list "$wrtbak_target"
+			;;
+	esac
 }
 
 wrtbak_parse_export_sysupgrade() {
@@ -299,6 +340,9 @@ case "$wrtbak_command" in
 		;;
 	remote-status)
 		wrtbak_parse_remote_status "$@"
+		;;
+	remote-test|remote-list)
+		wrtbak_parse_remote_target_json_only "$wrtbak_command" "$@"
 		;;
 	detect|list-items)
 		wrtbak_parse_detect "$@"

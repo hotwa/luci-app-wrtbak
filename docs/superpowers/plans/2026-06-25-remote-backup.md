@@ -15,7 +15,7 @@
 **Spec:** `docs/superpowers/specs/2026-06-25-remote-backup-design.md`
 
 - [x] **Phase 1: Foundation Gate** - config helpers, device ID, path normalization, JSON result helpers, target validation tests pass.
-- [ ] **Phase 2: Driver Gate** - fake WebDAV and fake S3 driver tests pass without real credentials.
+- [x] **Phase 2: Driver Gate** - fake WebDAV and fake S3 driver tests pass without real credentials.
 - [ ] **Phase 3: Remote CLI Gate** - status/test/upload/list/delete/prune/history/lock commands pass local fixture tests.
 - [ ] **Phase 4: Schedule Gate** - cron generation, schedule status, item snapshot, and prune-on-upload tests pass.
 - [ ] **Phase 5: LuCI Gate** - remote storage UI, secret handling, ACL, button mapping, and layout tests pass.
@@ -221,7 +221,7 @@ git commit -m "feat: add remote backup config foundation"
 - Modify: `root/usr/bin/wrtbak`
 - Test: `tests/test_remote_webdav_fixture.sh`
 
-- [ ] **Step 1: Write the failing WebDAV fixture test**
+- [x] **Step 1: Write the failing WebDAV fixture test**
 
 Create a temporary fake `curl` executable earlier in `PATH`:
 
@@ -257,7 +257,7 @@ Assert:
 - `wrtbak remote-list --target webdav --json` parses PROPFIND XML and returns normalized paths under `R2/wrtbak/<device-id>/`.
 - unsupported PROPFIND returns `ok:false` and `code:"unsupported_list"`.
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -267,7 +267,7 @@ sh tests/test_remote_webdav_fixture.sh
 
 Expected: FAIL because WebDAV commands are not implemented.
 
-- [ ] **Step 3: Implement WebDAV driver**
+- [x] **Step 3: Implement WebDAV driver**
 
 Create `root/usr/lib/wrtbak/remote_webdav.sh` with:
 - `wrtbak_webdav_mkcol_chain`
@@ -280,7 +280,7 @@ Create `root/usr/lib/wrtbak/remote_webdav.sh` with:
 
 Use `curl --netrc-file "$tmp_netrc"` or `curl --config "$tmp_config"` so credentials are not passed as command arguments.
 
-- [ ] **Step 4: Wire driver functions**
+- [x] **Step 4: Wire driver functions**
 
 Modify `root/usr/lib/wrtbak/remote.sh`:
 - resolve `webdav` target config
@@ -291,7 +291,7 @@ Modify `root/usr/bin/wrtbak`:
 - source `remote_webdav.sh`
 - add parsers for `remote-test --target webdav --json` and `remote-list --target webdav --json`
 
-- [ ] **Step 5: Run WebDAV tests**
+- [x] **Step 5: Run WebDAV tests**
 
 Run:
 
@@ -309,7 +309,7 @@ Expected: PASS.
 - Modify: `root/usr/bin/wrtbak`
 - Test: `tests/test_remote_s3_fixture.sh`
 
-- [ ] **Step 1: Write the failing S3 fixture test**
+- [x] **Step 1: Write the failing S3 fixture test**
 
 Create a temporary fake `rclone` executable earlier in `PATH`:
 
@@ -339,7 +339,7 @@ Assert:
 - `wrtbak remote-list --target s3 --json` returns normalized object keys.
 - missing `rclone` returns `ok:false` and `code:"missing_dependency"`.
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -349,7 +349,7 @@ sh tests/test_remote_s3_fixture.sh
 
 Expected: FAIL because S3 commands are not implemented.
 
-- [ ] **Step 3: Implement S3 driver**
+- [x] **Step 3: Implement S3 driver**
 
 Create `root/usr/lib/wrtbak/remote_s3.sh` with:
 - `wrtbak_s3_temp_rclone_config`
@@ -362,7 +362,7 @@ Create `root/usr/lib/wrtbak/remote_s3.sh` with:
 
 Use a temporary config section named `wrtbak_remote` and object keys from normalized `REMOTE_PATH`.
 
-- [ ] **Step 4: Wire S3 driver functions**
+- [x] **Step 4: Wire S3 driver functions**
 
 Modify `root/usr/lib/wrtbak/remote.sh`:
 - resolve `s3` target config
@@ -372,7 +372,7 @@ Modify `root/usr/lib/wrtbak/remote.sh`:
 Modify `root/usr/bin/wrtbak`:
 - source `remote_s3.sh`
 
-- [ ] **Step 5: Run driver tests**
+- [x] **Step 5: Run driver tests**
 
 Run:
 
@@ -383,7 +383,7 @@ sh tests/test_remote_s3_fixture.sh
 
 Expected: PASS.
 
-- [ ] **Step 6: Run all local tests and commit drivers**
+- [x] **Step 6: Run all local tests and commit drivers**
 
 Run:
 
