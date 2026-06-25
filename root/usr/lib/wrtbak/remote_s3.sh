@@ -69,20 +69,11 @@ wrtbak_s3_probe() {
 		rm -rf "$wrtbak_tmp"
 		return 1
 	}
-	wrtbak_remote_dir=${wrtbak_remote_path%/*}
-	wrtbak_remote_dir_ref=$(wrtbak_s3_remote_ref "$wrtbak_bucket" "$wrtbak_remote_dir") || {
-		rm -rf "$wrtbak_tmp"
-		return 1
-	}
 	wrtbak_remote_file_ref=$(wrtbak_s3_remote_ref "$wrtbak_bucket" "$wrtbak_remote_path") || {
 		rm -rf "$wrtbak_tmp"
 		return 1
 	}
 
-	if ! wrtbak_s3_rclone "$wrtbak_config" mkdir "$wrtbak_remote_dir_ref" >/dev/null; then
-		rm -rf "$wrtbak_tmp"
-		return 1
-	fi
 	if ! wrtbak_s3_rclone "$wrtbak_config" copyto "$wrtbak_probe_file" "$wrtbak_remote_file_ref" >/dev/null; then
 		rm -rf "$wrtbak_tmp"
 		return 1
@@ -172,11 +163,6 @@ wrtbak_s3_upload_file() {
 		rm -rf "$wrtbak_tmp"
 		return 1
 	}
-	wrtbak_remote_dir=${wrtbak_remote_path%/*}
-	wrtbak_remote_dir_ref=$(wrtbak_s3_remote_ref "$wrtbak_bucket" "$wrtbak_remote_dir") || {
-		rm -rf "$wrtbak_tmp"
-		return 1
-	}
 	wrtbak_remote_file_ref=$(wrtbak_s3_remote_ref "$wrtbak_bucket" "$wrtbak_remote_path") || {
 		rm -rf "$wrtbak_tmp"
 		return 1
@@ -186,10 +172,6 @@ wrtbak_s3_upload_file() {
 		return 1
 	}
 
-	if ! wrtbak_s3_rclone "$wrtbak_config" mkdir "$wrtbak_remote_dir_ref" >/dev/null; then
-		rm -rf "$wrtbak_tmp"
-		return 1
-	fi
 	if ! wrtbak_s3_rclone "$wrtbak_config" copyto "$wrtbak_local_file" "$wrtbak_remote_file_ref" >/dev/null; then
 		rm -rf "$wrtbak_tmp"
 		return 1

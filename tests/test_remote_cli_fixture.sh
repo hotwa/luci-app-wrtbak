@@ -97,7 +97,8 @@ done
 
 case "$command" in
 	mkdir)
-		exit 0
+		printf "S3 driver should not call mkdir\n" >&2
+		exit 45
 		;;
 	copyto)
 		stat -c '%s' "$source_file" >"$WRTBAK_FAKE_STATE_DIR/upload.size"

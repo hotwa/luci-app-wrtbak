@@ -81,7 +81,11 @@ for arg in "$@"; do
 done
 
 case "$command" in
-	mkdir|copyto|deletefile)
+	mkdir)
+		printf "S3 driver should not call mkdir\n" >&2
+		exit 45
+		;;
+	copyto|deletefile)
 		exit 0
 		;;
 	size)
