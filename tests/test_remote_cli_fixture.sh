@@ -210,6 +210,19 @@ assert data["no_op"] is True
 assert data["deleted_count"] == 0
 PY
 
+run_cli remote-prune --target default --max 9 --json >"$work_dir/prune-noop.json"
+python3 - "$work_dir/prune-noop.json" <<\PY
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+assert data["ok"] is True
+assert data["operation"] == "remote-prune"
+assert data["no_op"] is True
+assert data["deleted_count"] == 0
+assert data["kept_count"] == 5
+assert data["deleted_paths"] == []
+PY
+
 mkdir -p "$fixture_root/tmp/wrtbak/remote.lock"
 if run_cli remote-prune --target default --max 1 --json >"$work_dir/busy.json"; then
 	echo "remote-prune should fail while lock is held" >&2

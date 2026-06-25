@@ -766,7 +766,7 @@ wrtbak_remote_prune_unlocked() {
 	else
 		wrtbak_noop=false
 	fi
-	printf '%s\t%s\t%s\t%s' "$wrtbak_deleted" "$wrtbak_kept" "$wrtbak_noop" "$wrtbak_deleted_paths" > "$wrtbak_result_file"
+	printf '%s\t%s\t%s\t%s\n' "$wrtbak_deleted" "$wrtbak_kept" "$wrtbak_noop" "$wrtbak_deleted_paths" > "$wrtbak_result_file"
 	rm -f "$wrtbak_list" "$wrtbak_delete_list"
 }
 
