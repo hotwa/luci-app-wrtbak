@@ -43,6 +43,7 @@ jobs:
             test -f root/etc/config/wrtbak
             test -f root/usr/bin/wrtbak
             test -d root/usr/lib/wrtbak
+            test -f root/usr/lib/wrtbak/agent.sh
             test -f root/usr/lib/wrtbak/backup.sh
             test -f root/usr/lib/wrtbak/common.sh
             test -f root/usr/lib/wrtbak/manifest.sh
@@ -53,8 +54,12 @@ jobs:
             test -f root/usr/share/luci/menu.d/luci-app-wrtbak.json
             test -f root/usr/share/rpcd/acl.d/luci-app-wrtbak.json
             test -f root/usr/lib/wrtbak/paths.default
+            test -f tests/test_agent_plan_fixture.sh
+            test -f tests/test_agent_status_fixture.sh
             test -f tests/test_cli_fixture.sh
             test -f tests/test_detect_fixture.sh
+            test -f tests/test_restore_plan_fixture.sh
+            test -f tests/test_web_create_fixture.sh
 
             echo "== root payload =="
             find root -type f | sort
@@ -71,8 +76,9 @@ jobs:
             done
 
             echo "== fixture test =="
-            sh tests/test_cli_fixture.sh
-            sh tests/test_detect_fixture.sh
+            for test_script in tests/*.sh; do
+              sh "$test_script"
+            done
           } 2>&1 | tee logs/package-layout.log
 
       - name: Create package source artifact
