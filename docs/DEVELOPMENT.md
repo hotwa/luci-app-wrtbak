@@ -54,7 +54,7 @@ This repository contains the public documentation, non-secret examples, and the 
         └── manifest.json
 ```
 
-The current package provides a shell CLI for archive creation, inspection, installed package detection, selected-item archive generation, LuCI-triggered downloads, `.sysupgrade.tar.gz` export, and read-only agent maintenance planning. Restore planning exists, but automatic restore writes are intentionally not implemented yet.
+The current package provides a shell CLI for archive creation, inspection, installed package detection, selected-item archive generation, LuCI-triggered downloads, `.sysupgrade.tar.gz` export, WebDAV/S3 remote backup operations, cron-based automatic backup scheduling, and read-only agent maintenance planning. Restore planning exists, but automatic restore writes are intentionally not implemented yet.
 
 ## Runtime Assumptions
 
@@ -65,8 +65,10 @@ The CLI currently expects standard OpenWrt/BusyBox tools to be available:
 - `stat -c` for file mode and size metadata.
 - `find`, `sort`, `awk`, `sed`, and `grep`.
 - `jsonfilter` for OpenWrt metadata lookup and strict `restore-plan` manifest validation.
+- `curl` for WebDAV probe, upload, list, and delete operations.
+- `rclone` for S3-compatible probe, upload, list, and delete operations.
 
-The package `Makefile` does not add explicit `tar` or `gzip` dependencies because OpenWrt package names vary by build profile and BusyBox configuration. Ensure target images include working tar/gzip support before relying on archive creation or export.
+The package `Makefile` declares `curl` and `rclone` because those commands are directly invoked by remote backup targets. It does not add explicit `tar` or `gzip` dependencies because OpenWrt package names vary by build profile and BusyBox configuration. Ensure target images include working tar/gzip support before relying on archive creation or export.
 
 ## Basic Checks
 
@@ -136,7 +138,7 @@ for manifest in examples/*/manifest.json; do
 done
 ```
 
-Run the fixture test:
+Run the fixture tests:
 
 ```sh
 for test_script in tests/*.sh; do

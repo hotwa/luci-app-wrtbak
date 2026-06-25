@@ -18,6 +18,9 @@ Current capabilities:
 - Export selected backups as native `.sysupgrade.tar.gz` archives.
 - Download generated archives through LuCI's authenticated `cgi-download` flow.
 - Emit machine-readable maintenance status, readiness checks, backup dry runs, and restore plans for trusted remote operators.
+- Configure WebDAV and S3-compatible remote backup targets from LuCI or UCI.
+- Upload, list, prune, and delete remote backups through stable JSON CLI commands.
+- Apply cron-based automatic backups using the selected remote target.
 
 ## Security Warning
 
