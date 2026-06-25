@@ -90,7 +90,7 @@ case "$command" in
 		exit 0
 		;;
 	size)
-		printf 'Total objects: 1\nTotal size: 5 B (5 Bytes)\n'
+		printf 'Total objects: 1\nTotal size: 0.005 KiB (5 Bytes)\n'
 		exit 0
 		;;
 	lsjson)

@@ -35,6 +35,15 @@ wrtbak_s3_rclone() {
 	rclone --config "$wrtbak_config" "$@"
 }
 
+
+wrtbak_s3_size_matches() {
+	wrtbak_expected_size=$1
+	awk -v expected="$wrtbak_expected_size" '
+		index($0, "Total size: " expected " ") || index($0, "(" expected " Bytes)") { found = 1 }
+		END { exit found ? 0 : 1 }
+	'
+}
+
 wrtbak_s3_remote_ref() {
 	wrtbak_bucket=$1
 	wrtbak_path=$2
@@ -79,7 +88,7 @@ wrtbak_s3_probe() {
 		rm -rf "$wrtbak_tmp"
 		return 1
 	fi
-	if ! wrtbak_s3_rclone "$wrtbak_config" size "$wrtbak_remote_file_ref" | grep 'Total size: 5 ' >/dev/null 2>&1; then
+	if ! wrtbak_s3_rclone "$wrtbak_config" size "$wrtbak_remote_file_ref" | wrtbak_s3_size_matches 5; then
 		rm -rf "$wrtbak_tmp"
 		return 1
 	fi
@@ -112,7 +121,7 @@ wrtbak_s3_list_raw() {
 	}
 	wrtbak_json="$wrtbak_tmp/lsjson.json"
 
-	if ! wrtbak_s3_rclone "$wrtbak_config" lsjson "$wrtbak_remote_prefix_ref" > "$wrtbak_json" 2>/dev/null; then
+	if ! wrtbak_s3_rclone "$wrtbak_config" lsjson --recursive "$wrtbak_remote_prefix_ref" > "$wrtbak_json" 2>/dev/null; then
 		rm -rf "$wrtbak_tmp"
 		return 1
 	fi
@@ -177,7 +186,7 @@ wrtbak_s3_upload_file() {
 		rm -rf "$wrtbak_tmp"
 		return 1
 	fi
-	if ! wrtbak_s3_rclone "$wrtbak_config" size "$wrtbak_remote_file_ref" | grep "Total size: $wrtbak_local_size " >/dev/null 2>&1; then
+	if ! wrtbak_s3_rclone "$wrtbak_config" size "$wrtbak_remote_file_ref" | wrtbak_s3_size_matches "$wrtbak_local_size"; then
 		rm -rf "$wrtbak_tmp"
 		return 1
 	fi
