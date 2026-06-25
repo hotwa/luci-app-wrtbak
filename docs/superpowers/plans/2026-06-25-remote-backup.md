@@ -17,7 +17,7 @@
 - [x] **Phase 1: Foundation Gate** - config helpers, device ID, path normalization, JSON result helpers, target validation tests pass.
 - [x] **Phase 2: Driver Gate** - fake WebDAV and fake S3 driver tests pass without real credentials.
 - [x] **Phase 3: Remote CLI Gate** - status/test/upload/list/delete/prune/history/lock commands pass local fixture tests.
-- [ ] **Phase 4: Schedule Gate** - cron generation, schedule status, item snapshot, and prune-on-upload tests pass.
+- [x] **Phase 4: Schedule Gate** - cron generation, schedule status, item snapshot, and prune-on-upload tests pass.
 - [ ] **Phase 5: LuCI Gate** - remote storage UI, secret handling, ACL, button mapping, and layout tests pass.
 - [ ] **Phase 6: Package Gate** - GitHub Actions builds an APK from the branch.
 - [ ] **Phase 7: Router QA Gate** - install on `192.168.11.234`, configure runtime credentials, verify WebDAV/S3 upload/list/prune and automatic backup.
@@ -524,7 +524,7 @@ Expected: tests pass and commit succeeds.
 - Modify: `root/etc/config/wrtbak`
 - Test: `tests/test_remote_schedule_fixture.sh`
 
-- [ ] **Step 1: Write the failing schedule fixture test**
+- [x] **Step 1: Write the failing schedule fixture test**
 
 Assert:
 - `schedule-apply --json` with disabled schedule removes only the marked wrtbak cron block.
@@ -536,7 +536,7 @@ Assert:
 - `current selection` snapshot is represented as comma-separated UCI item IDs before schedule apply.
 - `remote-status --json` exposes schedule status and `cron_installed`.
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -546,7 +546,7 @@ sh tests/test_remote_schedule_fixture.sh
 
 Expected: FAIL because `schedule-apply` is not implemented.
 
-- [ ] **Step 3: Implement schedule module**
+- [x] **Step 3: Implement schedule module**
 
 Create `root/usr/lib/wrtbak/schedule.sh` with:
 - `wrtbak_schedule_validate`
@@ -562,14 +562,14 @@ Cron command:
 /usr/bin/wrtbak remote-upload --target default --profile '<profile>' --items '<items>' --format '<format>' --prune-max '<max_backups>' --json >/tmp/wrtbak/remote-cron.log 2>&1
 ```
 
-- [ ] **Step 4: Wire schedule into status and CLI**
+- [x] **Step 4: Wire schedule into status and CLI**
 
 Modify:
 - `root/usr/lib/wrtbak/remote.sh` to include schedule status in `remote-status`.
 - `root/usr/bin/wrtbak` to source `schedule.sh` and parse `schedule-apply --json`.
 - `root/etc/config/wrtbak` to include new main/remote/schedule default sections.
 
-- [ ] **Step 5: Run schedule tests**
+- [x] **Step 5: Run schedule tests**
 
 Run:
 
@@ -579,7 +579,7 @@ sh tests/test_remote_schedule_fixture.sh
 
 Expected: PASS.
 
-- [ ] **Step 6: Run all tests and commit**
+- [x] **Step 6: Run all tests and commit**
 
 Run:
 

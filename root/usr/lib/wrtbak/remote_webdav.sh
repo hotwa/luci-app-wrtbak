@@ -183,3 +183,65 @@ wrtbak_webdav_list_raw() {
 
 	rm -rf "$wrtbak_tmp"
 }
+
+
+wrtbak_webdav_upload_file() {
+	wrtbak_url=$1
+	wrtbak_username=$2
+	wrtbak_password=$3
+	wrtbak_root_path=$4
+	wrtbak_local_file=$5
+	wrtbak_remote_path=$6
+	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-webdav-upload.XXXXXX") || return 1
+	wrtbak_netrc=$(wrtbak_webdav_make_netrc "$wrtbak_tmp" "$wrtbak_url" "$wrtbak_username" "$wrtbak_password") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_base_url=$(wrtbak_webdav_base_url "$wrtbak_url" "$wrtbak_root_path") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_file_url=$(wrtbak_webdav_url_for_path "$wrtbak_url" "$wrtbak_remote_path") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_collection_url=${wrtbak_file_url%/*}
+	wrtbak_local_size=$(wrtbak_size_of "$wrtbak_local_file") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+
+	wrtbak_webdav_mkcol_chain "$wrtbak_netrc" "$wrtbak_collection_url" "$wrtbak_base_url"
+	if ! wrtbak_webdav_curl "$wrtbak_netrc" --upload-file "$wrtbak_local_file" "$wrtbak_file_url" >/dev/null; then
+		rm -rf "$wrtbak_tmp"
+		return 1
+	fi
+	if ! wrtbak_webdav_curl "$wrtbak_netrc" -I "$wrtbak_file_url" | grep -i "^Content-Length:[[:space:]]*$wrtbak_local_size" >/dev/null 2>&1; then
+		rm -rf "$wrtbak_tmp"
+		return 1
+	fi
+	rm -rf "$wrtbak_tmp"
+	return 0
+}
+
+wrtbak_webdav_delete_path() {
+	wrtbak_url=$1
+	wrtbak_username=$2
+	wrtbak_password=$3
+	wrtbak_remote_path=$4
+	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-webdav-delete.XXXXXX") || return 1
+	wrtbak_netrc=$(wrtbak_webdav_make_netrc "$wrtbak_tmp" "$wrtbak_url" "$wrtbak_username" "$wrtbak_password") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_file_url=$(wrtbak_webdav_url_for_path "$wrtbak_url" "$wrtbak_remote_path") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	if ! wrtbak_webdav_curl "$wrtbak_netrc" -X DELETE "$wrtbak_file_url" >/dev/null; then
+		rm -rf "$wrtbak_tmp"
+		return 1
+	fi
+	rm -rf "$wrtbak_tmp"
+	return 0
+}

@@ -27,6 +27,7 @@ fi
 . "$WRTBAK_LIBDIR/remote.sh"
 . "$WRTBAK_LIBDIR/remote_webdav.sh"
 . "$WRTBAK_LIBDIR/remote_s3.sh"
+. "$WRTBAK_LIBDIR/schedule.sh"
 
 wrtbak_usage() {
 	cat <<'EOF'
@@ -40,6 +41,8 @@ Usage:
   wrtbak remote-upload --target default|webdav|s3 --profile NAME --items IDS|all --format wrtbak|sysupgrade [--prune-max N] --json
   wrtbak remote-delete --target default|webdav|s3 --path REMOTE_PATH --json
   wrtbak remote-prune --target default|webdav|s3 --max N --json
+  wrtbak schedule-status --json
+  wrtbak schedule-apply --json
   wrtbak detect [--json]
   wrtbak plan --profile NAME --items IDS --format wrtbak|sysupgrade --json
   wrtbak restore-plan --input FILE --json
@@ -317,6 +320,34 @@ wrtbak_parse_remote_prune() {
 	[ -n "$wrtbak_max" ] || wrtbak_die "--max is required"
 	wrtbak_remote_prune "$wrtbak_target" "$wrtbak_max"
 }
+
+wrtbak_parse_schedule_json_only() {
+	wrtbak_schedule_command=$1
+	shift
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown $wrtbak_schedule_command argument: $1"
+				;;
+		esac
+	done
+	case "$wrtbak_schedule_command" in
+		schedule-status)
+			wrtbak_schedule_status_json
+			;;
+		schedule-apply)
+			wrtbak_schedule_apply
+			;;
+	esac
+}
+
 wrtbak_parse_export_sysupgrade() {
 	wrtbak_input=
 	wrtbak_output=
@@ -475,6 +506,9 @@ case "$wrtbak_command" in
 		;;
 	remote-prune)
 		wrtbak_parse_remote_prune "$@"
+		;;
+	schedule-status|schedule-apply)
+		wrtbak_parse_schedule_json_only "$wrtbak_command" "$@"
 		;;
 	detect|list-items)
 		wrtbak_parse_detect "$@"

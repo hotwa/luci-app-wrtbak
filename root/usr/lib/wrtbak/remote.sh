@@ -664,11 +664,15 @@ wrtbak_remote_create_local_archive() {
 	fi
 }
 
+
 wrtbak_remote_upload_driver() {
 	wrtbak_upload_driver_target=$1
 	wrtbak_upload_driver_local_file=$2
 	wrtbak_upload_driver_remote_path=$3
 	case "$wrtbak_upload_driver_target" in
+		webdav)
+			wrtbak_webdav_upload_file "$wrtbak_remote_webdav_url" "$wrtbak_remote_webdav_username" "$wrtbak_remote_webdav_password" "$wrtbak_remote_webdav_path" "$wrtbak_upload_driver_local_file" "$wrtbak_upload_driver_remote_path"
+			;;
 		s3)
 			wrtbak_s3_upload_file "$wrtbak_remote_s3_endpoint" "$wrtbak_remote_s3_region" "$wrtbak_remote_s3_bucket" "$wrtbak_remote_s3_access_key" "$wrtbak_remote_s3_secret_key" "$wrtbak_remote_s3_force_path_style" "$wrtbak_upload_driver_local_file" "$wrtbak_upload_driver_remote_path"
 			;;
@@ -682,6 +686,9 @@ wrtbak_remote_delete_driver() {
 	wrtbak_delete_driver_target=$1
 	wrtbak_delete_driver_remote_path=$2
 	case "$wrtbak_delete_driver_target" in
+		webdav)
+			wrtbak_webdav_delete_path "$wrtbak_remote_webdav_url" "$wrtbak_remote_webdav_username" "$wrtbak_remote_webdav_password" "$wrtbak_delete_driver_remote_path"
+			;;
 		s3)
 			wrtbak_s3_delete_path "$wrtbak_remote_s3_endpoint" "$wrtbak_remote_s3_region" "$wrtbak_remote_s3_bucket" "$wrtbak_remote_s3_access_key" "$wrtbak_remote_s3_secret_key" "$wrtbak_remote_s3_force_path_style" "$wrtbak_delete_driver_remote_path"
 			;;
@@ -784,6 +791,7 @@ wrtbak_remote_print_prune_json_fields() {
 	printf ']\n'
 }
 
+
 wrtbak_remote_upload() {
 	wrtbak_target=$(wrtbak_remote_resolve_target "$1") || {
 		wrtbak_remote_error_json remote-upload "$1" invalid_config "unknown remote target" ""
@@ -795,16 +803,21 @@ wrtbak_remote_upload() {
 	wrtbak_prune_max=$5
 	wrtbak_remote_require_enabled "$wrtbak_target" remote-upload || return 1
 	case "$wrtbak_target" in
+		webdav)
+			wrtbak_remote_load_webdav_config || {
+				wrtbak_remote_error_json remote-upload "$wrtbak_target" invalid_config "WebDAV target is incomplete" ""
+				return 1
+			}
+			wrtbak_remote_require_dependency curl remote-upload "$wrtbak_target" || return 1
+			wrtbak_upload_driver_name=curl
+			;;
 		s3)
 			wrtbak_remote_load_s3_config || {
 				wrtbak_remote_error_json remote-upload "$wrtbak_target" invalid_config "S3 target is incomplete" ""
 				return 1
 			}
 			wrtbak_remote_require_dependency rclone remote-upload "$wrtbak_target" || return 1
-			;;
-		*)
-			wrtbak_remote_error_json remote-upload "$wrtbak_target" command_failed "$wrtbak_target upload is not implemented yet" ""
-			return 1
+			wrtbak_upload_driver_name=rclone
 			;;
 	esac
 	if ! wrtbak_remote_lock_acquire; then
@@ -819,11 +832,18 @@ wrtbak_remote_upload() {
 		wrtbak_remote_error_json remote-upload "$wrtbak_target" command_failed "local archive creation failed" ""
 		return 1
 	}
-	wrtbak_local_path=$(printf '%s' "$wrtbak_local_info" | awk -F '\t' '{ print $1 }')
-	wrtbak_filename=$(printf '%s' "$wrtbak_local_info" | awk -F '\t' '{ print $2 }')
+	wrtbak_local_path=$(printf '%s' "$wrtbak_local_info" | awk -F '	' '{ print $1 }')
+	wrtbak_filename=$(printf '%s' "$wrtbak_local_info" | awk -F '	' '{ print $2 }')
 	wrtbak_size=$(wrtbak_size_of "$wrtbak_local_path")
 	wrtbak_sha=$(wrtbak_sha256_of "$wrtbak_local_path")
 	case "$wrtbak_target" in
+		webdav)
+			wrtbak_remote_path=$(wrtbak_join_remote_path "$wrtbak_remote_webdav_path" wrtbak "$(wrtbak_effective_device_id)" "$wrtbak_format" "$wrtbak_year" "$wrtbak_filename") || {
+				wrtbak_remote_lock_release
+				wrtbak_remote_error_json remote-upload "$wrtbak_target" invalid_config "cannot build remote path" ""
+				return 1
+			}
+			;;
 		s3)
 			wrtbak_remote_path=$(wrtbak_join_remote_path "$wrtbak_remote_s3_path" wrtbak "$(wrtbak_effective_device_id)" "$wrtbak_format" "$wrtbak_year" "$wrtbak_filename") || {
 				wrtbak_remote_lock_release
@@ -834,7 +854,7 @@ wrtbak_remote_upload() {
 	esac
 	wrtbak_uploaded_remote_path=$wrtbak_remote_path
 	if ! wrtbak_remote_upload_driver "$wrtbak_target" "$wrtbak_local_path" "$wrtbak_uploaded_remote_path"; then
-		wrtbak_history_append remote-upload "$wrtbak_target" false command_failed "upload failed" "$wrtbak_remote_path"
+		wrtbak_history_append remote-upload "$wrtbak_target" false command_failed "upload failed" "$wrtbak_uploaded_remote_path"
 		wrtbak_remote_lock_release
 		wrtbak_remote_error_json remote-upload "$wrtbak_target" command_failed "remote upload failed" ""
 		return 1
@@ -857,7 +877,7 @@ wrtbak_remote_upload() {
 	esac
 	if [ "$wrtbak_prune_max" -gt 0 ]; then
 		if ! wrtbak_remote_prune_unlocked "$wrtbak_target" "$wrtbak_prune_max" "$wrtbak_prune_result"; then
-			wrtbak_history_append remote-upload "$wrtbak_target" false command_failed "upload succeeded but prune failed" "$wrtbak_remote_path"
+			wrtbak_history_append remote-upload "$wrtbak_target" false command_failed "upload succeeded but prune failed" "$wrtbak_uploaded_remote_path"
 			wrtbak_remote_lock_release
 			wrtbak_remote_error_json remote-upload "$wrtbak_target" command_failed "upload succeeded but prune failed" ""
 			rm -f "$wrtbak_prune_result"
@@ -866,23 +886,39 @@ wrtbak_remote_upload() {
 	fi
 	wrtbak_history_append remote-upload "$wrtbak_target" true "" "upload complete" "$wrtbak_uploaded_remote_path"
 	wrtbak_remote_lock_release
-	printf '{\n'
-	printf '  "ok": true,\n'
-	printf '  "operation": "remote-upload",\n'
-	printf '  "target": '; wrtbak_json_string "$wrtbak_target"; printf ',\n'
-	printf '  "driver": "rclone",\n'
-	printf '  "format": '; wrtbak_json_string "$wrtbak_format"; printf ',\n'
-	printf '  "remote_path": '; wrtbak_json_string "$wrtbak_uploaded_remote_path"; printf ',\n'
-	printf '  "size": %s,\n' "$wrtbak_size"
-	printf '  "sha256": '; wrtbak_json_string "$wrtbak_sha"; printf ',\n'
-	printf '  "local_archive_retained": %s,\n' "$wrtbak_retained"
-	printf '  "local_archive_path": '; wrtbak_json_string "$wrtbak_local_path"; printf ',\n'
-	printf '  "prune": {\n'
+	printf '{
+'
+	printf '  "ok": true,
+'
+	printf '  "operation": "remote-upload",
+'
+	printf '  "target": '; wrtbak_json_string "$wrtbak_target"; printf ',
+'
+	printf '  "driver": '; wrtbak_json_string "$wrtbak_upload_driver_name"; printf ',
+'
+	printf '  "format": '; wrtbak_json_string "$wrtbak_format"; printf ',
+'
+	printf '  "remote_path": '; wrtbak_json_string "$wrtbak_uploaded_remote_path"; printf ',
+'
+	printf '  "size": %s,
+' "$wrtbak_size"
+	printf '  "sha256": '; wrtbak_json_string "$wrtbak_sha"; printf ',
+'
+	printf '  "local_archive_retained": %s,
+' "$wrtbak_retained"
+	printf '  "local_archive_path": '; wrtbak_json_string "$wrtbak_local_path"; printf ',
+'
+	printf '  "prune": {
+'
 	wrtbak_remote_print_prune_json_fields "$wrtbak_prune_result"
-	printf '  }\n'
-	printf '}\n'
+	printf '  }
+'
+	printf '}
+'
 	rm -f "$wrtbak_prune_result"
 }
+
+
 
 wrtbak_remote_delete() {
 	wrtbak_target=$(wrtbak_remote_resolve_target "$1") || {
@@ -892,16 +928,21 @@ wrtbak_remote_delete() {
 	wrtbak_path=$2
 	wrtbak_remote_require_enabled "$wrtbak_target" remote-delete || return 1
 	case "$wrtbak_target" in
+		webdav)
+			wrtbak_remote_load_webdav_config || {
+				wrtbak_remote_error_json remote-delete "$wrtbak_target" invalid_config "WebDAV target is incomplete" ""
+				return 1
+			}
+			wrtbak_remote_require_dependency curl remote-delete "$wrtbak_target" || return 1
+			wrtbak_delete_driver_name=curl
+			;;
 		s3)
 			wrtbak_remote_load_s3_config || {
 				wrtbak_remote_error_json remote-delete "$wrtbak_target" invalid_config "S3 target is incomplete" ""
 				return 1
 			}
 			wrtbak_remote_require_dependency rclone remote-delete "$wrtbak_target" || return 1
-			;;
-		*)
-			wrtbak_remote_error_json remote-delete "$wrtbak_target" command_failed "$wrtbak_target delete is not implemented yet" ""
-			return 1
+			wrtbak_delete_driver_name=rclone
 			;;
 	esac
 	wrtbak_path=$(wrtbak_remote_validate_backup_path "$wrtbak_target" "$wrtbak_path") || {
@@ -919,15 +960,25 @@ wrtbak_remote_delete() {
 	fi
 	wrtbak_history_append remote-delete "$wrtbak_target" true "" "delete complete" "$wrtbak_path"
 	wrtbak_remote_lock_release
-	printf '{\n'
-	printf '  "ok": true,\n'
-	printf '  "operation": "remote-delete",\n'
-	printf '  "target": '; wrtbak_json_string "$wrtbak_target"; printf ',\n'
-	printf '  "driver": "rclone",\n'
-	printf '  "remote_path": '; wrtbak_json_string "$wrtbak_path"; printf ',\n'
-	printf '  "deleted": true\n'
-	printf '}\n'
+	printf '{
+'
+	printf '  "ok": true,
+'
+	printf '  "operation": "remote-delete",
+'
+	printf '  "target": '; wrtbak_json_string "$wrtbak_target"; printf ',
+'
+	printf '  "driver": '; wrtbak_json_string "$wrtbak_delete_driver_name"; printf ',
+'
+	printf '  "remote_path": '; wrtbak_json_string "$wrtbak_path"; printf ',
+'
+	printf '  "deleted": true
+'
+	printf '}
+'
 }
+
+
 
 wrtbak_remote_prune() {
 	wrtbak_target=$(wrtbak_remote_resolve_target "$1") || {
@@ -937,16 +988,21 @@ wrtbak_remote_prune() {
 	wrtbak_max=$2
 	wrtbak_remote_require_enabled "$wrtbak_target" remote-prune || return 1
 	case "$wrtbak_target" in
+		webdav)
+			wrtbak_remote_load_webdav_config || {
+				wrtbak_remote_error_json remote-prune "$wrtbak_target" invalid_config "WebDAV target is incomplete" ""
+				return 1
+			}
+			wrtbak_remote_require_dependency curl remote-prune "$wrtbak_target" || return 1
+			wrtbak_prune_driver_name=curl
+			;;
 		s3)
 			wrtbak_remote_load_s3_config || {
 				wrtbak_remote_error_json remote-prune "$wrtbak_target" invalid_config "S3 target is incomplete" ""
 				return 1
 			}
 			wrtbak_remote_require_dependency rclone remote-prune "$wrtbak_target" || return 1
-			;;
-		*)
-			wrtbak_remote_error_json remote-prune "$wrtbak_target" command_failed "$wrtbak_target prune is not implemented yet" ""
-			return 1
+			wrtbak_prune_driver_name=rclone
 			;;
 	esac
 	if ! wrtbak_remote_lock_acquire; then
@@ -966,13 +1022,20 @@ wrtbak_remote_prune() {
 	fi
 	wrtbak_history_append remote-prune "$wrtbak_target" true "" "prune complete" ""
 	wrtbak_remote_lock_release
-	printf '{\n'
-	printf '  "ok": true,\n'
-	printf '  "operation": "remote-prune",\n'
-	printf '  "target": '; wrtbak_json_string "$wrtbak_target"; printf ',\n'
-	printf '  "driver": "rclone",\n'
-	printf '  "max": %s,\n' "$wrtbak_max"
+	printf '{
+'
+	printf '  "ok": true,
+'
+	printf '  "operation": "remote-prune",
+'
+	printf '  "target": '; wrtbak_json_string "$wrtbak_target"; printf ',
+'
+	printf '  "driver": '; wrtbak_json_string "$wrtbak_prune_driver_name"; printf ',
+'
+	printf '  "max": %s,
+' "$wrtbak_max"
 	wrtbak_remote_print_prune_json_fields "$wrtbak_result"
-	printf '}\n'
+	printf '}
+'
 	rm -f "$wrtbak_result"
 }
