@@ -18,7 +18,7 @@
 - [x] **Phase 2: Driver Gate** - fake WebDAV and fake S3 driver tests pass without real credentials.
 - [x] **Phase 3: Remote CLI Gate** - status/test/upload/list/delete/prune/history/lock commands pass local fixture tests.
 - [x] **Phase 4: Schedule Gate** - cron generation, schedule status, item snapshot, and prune-on-upload tests pass.
-- [ ] **Phase 5: LuCI Gate** - remote storage UI, secret handling, ACL, button mapping, and layout tests pass.
+- [x] **Phase 5: LuCI Gate** - remote storage UI, secret handling, ACL, button mapping, and layout tests pass.
 - [ ] **Phase 6: Package Gate** - GitHub Actions builds an APK from the branch.
 - [ ] **Phase 7: Router QA Gate** - install on `192.168.11.234`, configure runtime credentials, verify WebDAV/S3 upload/list/prune and automatic backup.
 
@@ -603,7 +603,7 @@ Expected: tests pass and commit succeeds.
 - Test: `tests/test_luci_layout.sh`
 - Test: `tests/test_luci_remote_layout.sh`
 
-- [ ] **Step 1: Write the failing LuCI remote layout test**
+- [x] **Step 1: Write the failing LuCI remote layout test**
 
 Create `tests/test_luci_remote_layout.sh`. Assert:
 - view imports `uci`.
@@ -617,7 +617,7 @@ Create `tests/test_luci_remote_layout.sh`. Assert:
 - automatic backup fields exist: enabled, frequency, time, profile, item mode, format, max backups.
 - ACL JSON includes UCI `wrtbak` read/write and remote command exec permissions.
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -627,7 +627,7 @@ sh tests/test_luci_remote_layout.sh
 
 Expected: FAIL because remote UI is not implemented.
 
-- [ ] **Step 3: Add UCI load/save structure**
+- [x] **Step 3: Add UCI load/save structure**
 
 Modify `htdocs/luci-static/resources/view/wrtbak/index.js`:
 - require `uci`
@@ -636,7 +636,7 @@ Modify `htdocs/luci-static/resources/view/wrtbak/index.js`:
 - implement blank-means-keep for password fields
 - implement explicit clear checkboxes for secrets
 
-- [ ] **Step 4: Add Remote Storage section**
+- [x] **Step 4: Add Remote Storage section**
 
 Add controls:
 - device ID field with generated ID hint
@@ -646,7 +646,7 @@ Add controls:
 - test buttons for WebDAV and S3
 - upload buttons for default/WebDAV/S3
 
-- [ ] **Step 5: Add History / Diagnostics section**
+- [x] **Step 5: Add History / Diagnostics section**
 
 Add controls:
 - target selector including default/WebDAV/S3
@@ -656,7 +656,7 @@ Add controls:
 - prune target button with max value
 - latest history display from `remote-status`
 
-- [ ] **Step 6: Add Automatic Backup section**
+- [x] **Step 6: Add Automatic Backup section**
 
 Add controls:
 - enabled toggle
@@ -671,7 +671,7 @@ Add controls:
 
 When item mode is current selection, write selected checkbox IDs to `wrtbak.auto.items` before calling `schedule-apply`.
 
-- [ ] **Step 7: Update ACL**
+- [x] **Step 7: Update ACL**
 
 Modify `root/usr/share/rpcd/acl.d/luci-app-wrtbak.json`:
 - add UCI read/write for `wrtbak`
@@ -684,7 +684,7 @@ Modify `root/usr/share/rpcd/acl.d/luci-app-wrtbak.json`:
   - `/usr/bin/wrtbak remote-prune *`
   - `/usr/bin/wrtbak schedule-apply --json`
 
-- [ ] **Step 8: Run LuCI tests**
+- [x] **Step 8: Run LuCI tests**
 
 Run:
 
@@ -695,7 +695,7 @@ sh tests/test_luci_remote_layout.sh
 
 Expected: PASS.
 
-- [ ] **Step 9: Run all tests and commit**
+- [x] **Step 9: Run all tests and commit**
 
 Run:
 
