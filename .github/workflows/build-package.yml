@@ -178,7 +178,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: luci-app-wrtbak-sdk-logs-${{ inputs.arch || 'aarch64_cortex-a53' }}
+          name: luci-app-wrtbak-sdk-logs-${{ steps.sdk-meta.outputs.arch_dir }}
           path: |
             sdk-artifacts/logs/
             sdk-artifacts/bin/packages/
