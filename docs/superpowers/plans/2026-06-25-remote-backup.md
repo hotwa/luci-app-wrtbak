@@ -14,7 +14,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-25-remote-backup-design.md`
 
-- [ ] **Phase 1: Foundation Gate** - config helpers, device ID, path normalization, JSON result helpers, target validation tests pass.
+- [x] **Phase 1: Foundation Gate** - config helpers, device ID, path normalization, JSON result helpers, target validation tests pass.
 - [ ] **Phase 2: Driver Gate** - fake WebDAV and fake S3 driver tests pass without real credentials.
 - [ ] **Phase 3: Remote CLI Gate** - status/test/upload/list/delete/prune/history/lock commands pass local fixture tests.
 - [ ] **Phase 4: Schedule Gate** - cron generation, schedule status, item snapshot, and prune-on-upload tests pass.
@@ -52,7 +52,7 @@
 - Modify: `root/usr/bin/wrtbak`
 - Test: `tests/test_remote_config_fixture.sh`
 
-- [ ] **Step 1: Write the failing config fixture test**
+- [x] **Step 1: Write the failing config fixture test**
 
 Create `tests/test_remote_config_fixture.sh` with a fixture root containing:
 
@@ -108,7 +108,7 @@ Assert:
 - `targets.webdav.path` is normalized to `R2`.
 - `targets.s3.enabled` is `false`.
 
-- [ ] **Step 2: Run the failing test**
+- [x] **Step 2: Run the failing test**
 
 Run:
 
@@ -118,7 +118,7 @@ sh tests/test_remote_config_fixture.sh
 
 Expected: FAIL because `remote-status` is not implemented.
 
-- [ ] **Step 3: Implement config helpers**
+- [x] **Step 3: Implement config helpers**
 
 Create `root/usr/lib/wrtbak/config.sh` with:
 
@@ -155,7 +155,7 @@ Also add wrappers:
 - `wrtbak_bool_enabled`
 - `wrtbak_secret_is_set`
 
-- [ ] **Step 4: Implement device ID and path helpers**
+- [x] **Step 4: Implement device ID and path helpers**
 
 In `root/usr/lib/wrtbak/remote.sh`, add:
 - `wrtbak_normalize_remote_segment`
@@ -172,7 +172,7 @@ Device ID must follow the spec:
 - `sha256sum` first 8 hex characters
 - max length 64
 
-- [ ] **Step 5: Wire `remote-status` into the CLI**
+- [x] **Step 5: Wire `remote-status` into the CLI**
 
 Modify `root/usr/bin/wrtbak`:
 - source `config.sh`
@@ -180,7 +180,7 @@ Modify `root/usr/bin/wrtbak`:
 - add usage line `wrtbak remote-status --json`
 - add parser for `remote-status --json`
 
-- [ ] **Step 6: Run the foundation test**
+- [x] **Step 6: Run the foundation test**
 
 Run:
 
@@ -190,7 +190,7 @@ sh tests/test_remote_config_fixture.sh
 
 Expected: PASS.
 
-- [ ] **Step 7: Run existing tests**
+- [x] **Step 7: Run existing tests**
 
 Run:
 
@@ -202,7 +202,7 @@ git diff --check
 
 Expected: all commands exit 0.
 
-- [ ] **Step 8: Commit foundation**
+- [x] **Step 8: Commit foundation**
 
 Run:
 

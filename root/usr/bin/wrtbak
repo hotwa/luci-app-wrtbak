@@ -23,6 +23,8 @@ fi
 . "$WRTBAK_LIBDIR/pack.sh"
 . "$WRTBAK_LIBDIR/web.sh"
 . "$WRTBAK_LIBDIR/agent.sh"
+. "$WRTBAK_LIBDIR/config.sh"
+. "$WRTBAK_LIBDIR/remote.sh"
 
 wrtbak_usage() {
 	cat <<'EOF'
@@ -30,6 +32,7 @@ Usage:
   wrtbak info
   wrtbak status --json
   wrtbak doctor --json
+  wrtbak remote-status --json
   wrtbak detect [--json]
   wrtbak plan --profile NAME --items IDS --format wrtbak|sysupgrade --json
   wrtbak restore-plan --input FILE --json
@@ -129,6 +132,25 @@ wrtbak_parse_agent_json_only() {
 			wrtbak_agent_doctor_json
 			;;
 	esac
+}
+
+wrtbak_parse_remote_status() {
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown remote-status argument: $1"
+				;;
+		esac
+	done
+
+	wrtbak_remote_status_json
 }
 
 wrtbak_parse_export_sysupgrade() {
@@ -274,6 +296,9 @@ case "$wrtbak_command" in
 		;;
 	status|doctor)
 		wrtbak_parse_agent_json_only "$wrtbak_command" "$@"
+		;;
+	remote-status)
+		wrtbak_parse_remote_status "$@"
 		;;
 	detect|list-items)
 		wrtbak_parse_detect "$@"
