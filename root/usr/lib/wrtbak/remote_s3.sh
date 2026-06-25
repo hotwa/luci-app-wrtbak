@@ -18,6 +18,7 @@ wrtbak_s3_make_config() {
 		printf 'secret_access_key = %s\n' "$wrtbak_secret_key"
 		printf 'endpoint = %s\n' "$wrtbak_endpoint"
 		printf 'region = %s\n' "$wrtbak_region"
+		printf 'no_check_bucket = true\n'
 		if wrtbak_bool_enabled "$wrtbak_force_path_style"; then
 			printf 'force_path_style = true\n'
 		else

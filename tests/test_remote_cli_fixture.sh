@@ -84,6 +84,7 @@ for arg in "$@"; do
 			printf 'bad rclone config mode: %s\n' "$mode" >&2
 			exit 44
 		fi
+		grep -q '^no_check_bucket = true$' "$arg" || { echo "missing no_check_bucket" >&2; exit 45; }
 		previous=$arg
 		continue
 	fi
