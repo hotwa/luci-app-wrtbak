@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       arch:
-        description: OpenWrt SDK architecture or arch-release tag.
+        description: OpenWrt SDK architecture tag; append @sha256:... to pin a Docker digest.
         default: aarch64_cortex-a53
         required: false
         type: string
@@ -132,6 +132,14 @@ jobs:
             -cf - . \
             | tar -C .sdk-feed/luci-app-wrtbak -xf -
 
+      - name: Resolve SDK artifact architecture
+        id: sdk-meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          arch="${{ inputs.arch || 'aarch64_cortex-a53' }}"
+          echo "arch_dir=${arch%@*}" >> "$GITHUB_OUTPUT"
+
       - name: Build installable packages
         uses: openwrt/gh-action-sdk@main
         env:
@@ -148,7 +156,7 @@ jobs:
       - name: List SDK artifacts
         run: |
           set -euo pipefail
-          wrtbak_dir="sdk-artifacts/bin/packages/${{ inputs.arch || 'aarch64_cortex-a53' }}/wrtbak"
+          wrtbak_dir="sdk-artifacts/bin/packages/${{ steps.sdk-meta.outputs.arch_dir }}/wrtbak"
           test -d "$wrtbak_dir"
           find "$wrtbak_dir" -type f | sort
           test -n "$(find "$wrtbak_dir" -maxdepth 1 -type f \( -name 'luci-app-wrtbak*.ipk' -o -name 'luci-app-wrtbak*.apk' \) -print -quit)"
@@ -156,14 +164,14 @@ jobs:
       - name: Upload SDK packages
         uses: actions/upload-artifact@v4
         with:
-          name: luci-app-wrtbak-sdk-${{ inputs.arch || 'aarch64_cortex-a53' }}
+          name: luci-app-wrtbak-sdk-${{ steps.sdk-meta.outputs.arch_dir }}
           path: |
-            sdk-artifacts/bin/packages/${{ inputs.arch || 'aarch64_cortex-a53' }}/wrtbak/*.ipk
-            sdk-artifacts/bin/packages/${{ inputs.arch || 'aarch64_cortex-a53' }}/wrtbak/*.apk
-            sdk-artifacts/bin/packages/${{ inputs.arch || 'aarch64_cortex-a53' }}/wrtbak/Packages*
-            sdk-artifacts/bin/packages/${{ inputs.arch || 'aarch64_cortex-a53' }}/wrtbak/APKINDEX*
-            sdk-artifacts/bin/packages/${{ inputs.arch || 'aarch64_cortex-a53' }}/wrtbak/index.json
-            sdk-artifacts/bin/packages/${{ inputs.arch || 'aarch64_cortex-a53' }}/wrtbak/packages.adb
+            sdk-artifacts/bin/packages/${{ steps.sdk-meta.outputs.arch_dir }}/wrtbak/*.ipk
+            sdk-artifacts/bin/packages/${{ steps.sdk-meta.outputs.arch_dir }}/wrtbak/*.apk
+            sdk-artifacts/bin/packages/${{ steps.sdk-meta.outputs.arch_dir }}/wrtbak/Packages*
+            sdk-artifacts/bin/packages/${{ steps.sdk-meta.outputs.arch_dir }}/wrtbak/APKINDEX*
+            sdk-artifacts/bin/packages/${{ steps.sdk-meta.outputs.arch_dir }}/wrtbak/index.json
+            sdk-artifacts/bin/packages/${{ steps.sdk-meta.outputs.arch_dir }}/wrtbak/packages.adb
           if-no-files-found: error
 
       - name: Upload SDK logs

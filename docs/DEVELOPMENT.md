@@ -182,6 +182,8 @@ The SDK job is manual so normal documentation pushes stay cheap. Default inputs 
 - `packages`: `luci-app-wrtbak`
 - `container`: `openwrt/sdk`
 
+If the moving `openwrt/sdk:<arch>` image breaks because of upstream feed changes, pin the SDK image digest by passing `arch` as `aarch64_cortex-a53@sha256:<digest>`. The workflow strips the digest only for artifact lookup, so the uploaded package artifact remains `luci-app-wrtbak-sdk-aarch64_cortex-a53`.
+
 The package repository keeps its OpenWrt `Makefile` at the repository root so `hotwa/OpenWRT-CI` can clone it directly into `wrt/package/luci-app-wrtbak`. The SDK workflow stages a temporary feed at `.sdk-feed/luci-app-wrtbak/` before invoking `openwrt/gh-action-sdk`, because OpenWrt feeds expect packages in subdirectories.
 
 The SDK job uploads:
