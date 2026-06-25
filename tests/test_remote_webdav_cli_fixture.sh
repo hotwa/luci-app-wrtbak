@@ -105,6 +105,12 @@ if [ "$head" -eq 1 ]; then
 	exit 0
 fi
 case "$method" in
+	PROPFIND)
+		size=$(cat "$WRTBAK_FAKE_STATE_DIR/upload.size" 2>/dev/null || printf 5)
+		printf "<?xml version=\"1.0\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>%s</D:href><D:propstat><D:prop><D:getcontentlength>%s</D:getcontentlength></D:prop></D:propstat></D:response></D:multistatus>
+" "$url" "$size"
+		exit 0
+		;;
 	MKCOL)
 		exit 0
 		;;

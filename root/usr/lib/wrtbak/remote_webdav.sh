@@ -113,7 +113,12 @@ wrtbak_webdav_probe() {
 		rm -rf "$wrtbak_tmp"
 		return 1
 	fi
-	if ! wrtbak_webdav_curl "$wrtbak_netrc" -I "$wrtbak_probe_url" | grep -i '^Content-Length:[[:space:]]*5' >/dev/null 2>&1; then
+	wrtbak_probe_propfind="$wrtbak_tmp/propfind.xml"
+	if ! wrtbak_webdav_curl "$wrtbak_netrc" -X PROPFIND -H "Depth: 0" "$wrtbak_probe_url" > "$wrtbak_probe_propfind" 2>/dev/null; then
+		rm -rf "$wrtbak_tmp"
+		return 1
+	fi
+	if ! grep "<[^>]*getcontentlength>5<" "$wrtbak_probe_propfind" >/dev/null 2>&1; then
 		rm -rf "$wrtbak_tmp"
 		return 1
 	fi
@@ -216,7 +221,12 @@ wrtbak_webdav_upload_file() {
 		rm -rf "$wrtbak_tmp"
 		return 1
 	fi
-	if ! wrtbak_webdav_curl "$wrtbak_netrc" -I "$wrtbak_file_url" | grep -i "^Content-Length:[[:space:]]*$wrtbak_local_size" >/dev/null 2>&1; then
+	wrtbak_upload_propfind="$wrtbak_tmp/propfind.xml"
+	if ! wrtbak_webdav_curl "$wrtbak_netrc" -X PROPFIND -H "Depth: 0" "$wrtbak_file_url" > "$wrtbak_upload_propfind" 2>/dev/null; then
+		rm -rf "$wrtbak_tmp"
+		return 1
+	fi
+	if ! grep "<[^>]*getcontentlength>$wrtbak_local_size<" "$wrtbak_upload_propfind" >/dev/null 2>&1; then
 		rm -rf "$wrtbak_tmp"
 		return 1
 	fi

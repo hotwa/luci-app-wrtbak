@@ -718,7 +718,7 @@ Expected: tests pass and commit succeeds.
 - Modify: `docs/DEVELOPMENT.md`
 - Modify: `docs/ROADMAP.md`
 
-- [ ] **Step 1: Run all local checks before pushing**
+- [x] **Step 1: Run all local checks before pushing**
 
 Run:
 
@@ -730,7 +730,7 @@ git diff --check
 
 Expected: all commands exit 0.
 
-- [ ] **Step 2: Push implementation branch**
+- [x] **Step 2: Push implementation branch**
 
 Run:
 
@@ -740,7 +740,7 @@ git push -u origin codex/remote-backup-design
 
 Expected: push succeeds.
 
-- [ ] **Step 3: Trigger GitHub Actions package build**
+- [x] **Step 3: Trigger GitHub Actions package build**
 
 Run:
 
