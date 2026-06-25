@@ -7,11 +7,12 @@
 - Documented `.wrtbak` and `.sysupgrade.tar.gz` formats.
 - Installed package detection and selected-item archive creation.
 - LuCI page for selecting backup items and downloading generated archives.
+- Machine-readable agent maintenance commands for status, doctor, backup plan, and read-only restore plan.
 
 ## v0.2
 
 - Restore review page for uploaded `.wrtbak` archives.
-- Selective restore planning with manifest and device compatibility checks.
+- Selective restore UI with manifest and device compatibility checks.
 - rpcd/ubus integration for privileged restore operations.
 
 ## v0.3

@@ -17,6 +17,7 @@ Current capabilities:
 - Create selected-item `.wrtbak` archives from the CLI or LuCI.
 - Export selected backups as native `.sysupgrade.tar.gz` archives.
 - Download generated archives through LuCI's authenticated `cgi-download` flow.
+- Emit machine-readable maintenance status, readiness checks, backup dry runs, and restore plans for trusted remote operators.
 
 ## Security Warning
 
@@ -27,6 +28,7 @@ Do not store real backups, device-specific secrets, or private restore archives 
 ## Documentation
 
 - [Backup format](docs/BACKUP_FORMAT.md)
+- [Agent maintenance runbook](docs/AGENT_MAINTENANCE.md)
 - [OpenWrt CI integration](docs/OPENWRT_CI_INTEGRATION.md)
 - [Development notes](docs/DEVELOPMENT.md)
 - [Roadmap](docs/ROADMAP.md)
