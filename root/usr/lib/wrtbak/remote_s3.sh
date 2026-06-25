@@ -39,7 +39,7 @@ wrtbak_s3_rclone() {
 wrtbak_s3_size_matches() {
 	wrtbak_expected_size=$1
 	awk -v expected="$wrtbak_expected_size" '
-		index($0, "Total size: " expected " ") || index($0, "(" expected " Bytes)") { found = 1 }
+		index($0, "Total size: " expected " ") || index($0, "(" expected " Byte") { found = 1 }
 		END { exit found ? 0 : 1 }
 	'
 }

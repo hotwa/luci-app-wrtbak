@@ -107,7 +107,7 @@ case "$command" in
 		;;
 	size)
 		size=$(cat "$WRTBAK_FAKE_STATE_DIR/upload.size" 2>/dev/null || printf '5')
-		printf 'Total objects: 1\nTotal size: 9.529 MiB (%s Bytes)\n' "$size"
+		printf 'Total objects: 1\nTotal size: 9.529 MiB (%s Byte)\n' "$size"
 		exit 0
 		;;
 	deletefile)
