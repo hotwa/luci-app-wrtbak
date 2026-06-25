@@ -157,3 +157,72 @@ wrtbak_s3_list_raw() {
 
 	rm -rf "$wrtbak_tmp"
 }
+
+wrtbak_s3_upload_file() {
+	wrtbak_endpoint=$1
+	wrtbak_region=$2
+	wrtbak_bucket=$3
+	wrtbak_access_key=$4
+	wrtbak_secret_key=$5
+	wrtbak_force_path_style=$6
+	wrtbak_local_file=$7
+	wrtbak_remote_path=$8
+	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-s3-upload.XXXXXX") || return 1
+	wrtbak_config=$(wrtbak_s3_make_config "$wrtbak_tmp" "$wrtbak_endpoint" "$wrtbak_region" "$wrtbak_access_key" "$wrtbak_secret_key" "$wrtbak_force_path_style") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_remote_dir=${wrtbak_remote_path%/*}
+	wrtbak_remote_dir_ref=$(wrtbak_s3_remote_ref "$wrtbak_bucket" "$wrtbak_remote_dir") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_remote_file_ref=$(wrtbak_s3_remote_ref "$wrtbak_bucket" "$wrtbak_remote_path") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_local_size=$(wrtbak_size_of "$wrtbak_local_file") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+
+	if ! wrtbak_s3_rclone "$wrtbak_config" mkdir "$wrtbak_remote_dir_ref" >/dev/null; then
+		rm -rf "$wrtbak_tmp"
+		return 1
+	fi
+	if ! wrtbak_s3_rclone "$wrtbak_config" copyto "$wrtbak_local_file" "$wrtbak_remote_file_ref" >/dev/null; then
+		rm -rf "$wrtbak_tmp"
+		return 1
+	fi
+	if ! wrtbak_s3_rclone "$wrtbak_config" size "$wrtbak_remote_file_ref" | grep "Total size: $wrtbak_local_size " >/dev/null 2>&1; then
+		rm -rf "$wrtbak_tmp"
+		return 1
+	fi
+	rm -rf "$wrtbak_tmp"
+	return 0
+}
+
+wrtbak_s3_delete_path() {
+	wrtbak_endpoint=$1
+	wrtbak_region=$2
+	wrtbak_bucket=$3
+	wrtbak_access_key=$4
+	wrtbak_secret_key=$5
+	wrtbak_force_path_style=$6
+	wrtbak_remote_path=$7
+	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-s3-delete.XXXXXX") || return 1
+	wrtbak_config=$(wrtbak_s3_make_config "$wrtbak_tmp" "$wrtbak_endpoint" "$wrtbak_region" "$wrtbak_access_key" "$wrtbak_secret_key" "$wrtbak_force_path_style") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_remote_file_ref=$(wrtbak_s3_remote_ref "$wrtbak_bucket" "$wrtbak_remote_path") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	if ! wrtbak_s3_rclone "$wrtbak_config" deletefile "$wrtbak_remote_file_ref" >/dev/null; then
+		rm -rf "$wrtbak_tmp"
+		return 1
+	fi
+	rm -rf "$wrtbak_tmp"
+	return 0
+}

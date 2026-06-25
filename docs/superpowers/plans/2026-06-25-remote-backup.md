@@ -16,7 +16,7 @@
 
 - [x] **Phase 1: Foundation Gate** - config helpers, device ID, path normalization, JSON result helpers, target validation tests pass.
 - [x] **Phase 2: Driver Gate** - fake WebDAV and fake S3 driver tests pass without real credentials.
-- [ ] **Phase 3: Remote CLI Gate** - status/test/upload/list/delete/prune/history/lock commands pass local fixture tests.
+- [x] **Phase 3: Remote CLI Gate** - status/test/upload/list/delete/prune/history/lock commands pass local fixture tests.
 - [ ] **Phase 4: Schedule Gate** - cron generation, schedule status, item snapshot, and prune-on-upload tests pass.
 - [ ] **Phase 5: LuCI Gate** - remote storage UI, secret handling, ACL, button mapping, and layout tests pass.
 - [ ] **Phase 6: Package Gate** - GitHub Actions builds an APK from the branch.
@@ -406,7 +406,7 @@ Expected: tests pass and commit succeeds.
 - Modify: `root/usr/bin/wrtbak`
 - Test: `tests/test_remote_cli_fixture.sh`
 
-- [ ] **Step 1: Write the failing remote CLI fixture test**
+- [x] **Step 1: Write the failing remote CLI fixture test**
 
 Create fixture tests with fake drivers and a fixture root. Assert:
 - `remote-upload --target default --profile auto --items all --format wrtbak --json` creates a local archive, uploads it, verifies size, and returns `ok:true`.
@@ -422,7 +422,7 @@ Create fixture tests with fake drivers and a fixture root. Assert:
 - busy lock returns `ok:false` and `code:"busy"`.
 - history JSONL never contains credentials and is capped by `history_max_entries`.
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run:
 
@@ -432,7 +432,7 @@ sh tests/test_remote_cli_fixture.sh
 
 Expected: FAIL because upload/delete/prune/history/lock are incomplete.
 
-- [ ] **Step 3: Implement JSON result helpers**
+- [x] **Step 3: Implement JSON result helpers**
 
 In `root/usr/lib/wrtbak/remote.sh`, add:
 - `wrtbak_json_ok_begin OPERATION`
@@ -442,7 +442,7 @@ In `root/usr/lib/wrtbak/remote.sh`, add:
 
 Handled failures must print parseable stdout JSON and exit nonzero.
 
-- [ ] **Step 4: Implement operation lock**
+- [x] **Step 4: Implement operation lock**
 
 Add:
 - `wrtbak_remote_lock_acquire`
@@ -450,7 +450,7 @@ Add:
 
 Use `flock` when available; otherwise atomic `mkdir /tmp/wrtbak/remote.lock`. Wait up to 5 seconds before returning `busy`.
 
-- [ ] **Step 5: Implement history JSONL**
+- [x] **Step 5: Implement history JSONL**
 
 Add:
 - `wrtbak_history_append`
@@ -459,7 +459,7 @@ Add:
 
 History records include timestamp, operation, target, driver, `ok`, code, remote path, local archive retention, and sanitized message.
 
-- [ ] **Step 6: Implement upload orchestration**
+- [x] **Step 6: Implement upload orchestration**
 
 Add:
 - `wrtbak_remote_create_local_archive`
@@ -473,7 +473,7 @@ Support:
 wrtbak remote-upload --target default|webdav|s3 --profile NAME --items IDS|all --format wrtbak|sysupgrade --prune-max N --json
 ```
 
-- [ ] **Step 7: Implement delete and prune orchestration**
+- [x] **Step 7: Implement delete and prune orchestration**
 
 Add:
 - `wrtbak_remote_delete`
@@ -482,14 +482,14 @@ Add:
 - backup filename validation
 - per-format retention sorting
 
-- [ ] **Step 8: Wire CLI parsers**
+- [x] **Step 8: Wire CLI parsers**
 
 Modify `root/usr/bin/wrtbak`:
 - add usage lines for upload/list/delete/prune
 - parse `--target`, `--profile`, `--items`, `--format`, `--prune-max`, `--max`, `--path`, `--json`
 - reject unknown args
 
-- [ ] **Step 9: Run remote CLI tests**
+- [x] **Step 9: Run remote CLI tests**
 
 Run:
 
@@ -499,7 +499,7 @@ sh tests/test_remote_cli_fixture.sh
 
 Expected: PASS.
 
-- [ ] **Step 10: Run all tests and commit**
+- [x] **Step 10: Run all tests and commit**
 
 Run:
 
