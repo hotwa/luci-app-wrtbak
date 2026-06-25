@@ -985,7 +985,7 @@ wrtbak_remote_prune() {
 		wrtbak_remote_error_json remote-prune "$1" invalid_config "unknown remote target" ""
 		return 1
 	}
-	wrtbak_max=$2
+	wrtbak_requested_max=$2
 	wrtbak_remote_require_enabled "$wrtbak_target" remote-prune || return 1
 	case "$wrtbak_target" in
 		webdav)
@@ -1014,7 +1014,7 @@ wrtbak_remote_prune() {
 		wrtbak_remote_error_json remote-prune "$wrtbak_target" command_failed "cannot create prune result" ""
 		return 1
 	}
-	if ! wrtbak_remote_prune_unlocked "$wrtbak_target" "$wrtbak_max" "$wrtbak_result"; then
+	if ! wrtbak_remote_prune_unlocked "$wrtbak_target" "$wrtbak_requested_max" "$wrtbak_result"; then
 		wrtbak_remote_lock_release
 		rm -f "$wrtbak_result"
 		wrtbak_remote_error_json remote-prune "$wrtbak_target" command_failed "remote prune failed" ""
@@ -1033,7 +1033,7 @@ wrtbak_remote_prune() {
 	printf '  "driver": '; wrtbak_json_string "$wrtbak_prune_driver_name"; printf ',
 '
 	printf '  "max": %s,
-' "$wrtbak_max"
+' "$wrtbak_requested_max"
 	wrtbak_remote_print_prune_json_fields "$wrtbak_result"
 	printf '}
 '

@@ -206,6 +206,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     data = json.load(handle)
 assert data["ok"] is True
 assert data["operation"] == "remote-prune"
+assert data["max"] == 0
 assert data["no_op"] is True
 assert data["deleted_count"] == 0
 PY
@@ -217,6 +218,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     data = json.load(handle)
 assert data["ok"] is True
 assert data["operation"] == "remote-prune"
+assert data["max"] == 9
 assert data["no_op"] is True
 assert data["deleted_count"] == 0
 assert data["kept_count"] == 5
