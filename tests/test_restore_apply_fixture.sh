@@ -11,10 +11,18 @@ source_archive="$work_dir/source.wrtbak"
 source_sysupgrade="$work_dir/source.sysupgrade.tar.gz"
 cache_archive="/tmp/wrtbak/restore-cache/sample.wrtbak"
 cache_sysupgrade="/tmp/wrtbak/restore-cache/sample.sysupgrade.tar.gz"
+cache_service_archive="/tmp/wrtbak/restore-cache/service-sample.wrtbak"
+cache_mismatch_archive="/tmp/wrtbak/restore-cache/mismatch.wrtbak"
+cache_failure_archive="/tmp/wrtbak/restore-cache/write-failure.wrtbak"
+cache_unsafe_sysupgrade="/tmp/wrtbak/restore-cache/unsafe.sysupgrade.tar.gz"
 libdir="$repo_dir/root/usr/lib/wrtbak"
 cli="$repo_dir/root/usr/bin/wrtbak"
 
 cleanup() {
+	if [ "${WRTBAK_KEEP_TEST_WORKDIR:-0}" = "1" ]; then
+		printf '%s\n' "$work_dir" >&2
+		return 0
+	fi
 	rm -rf "$work_dir"
 }
 trap cleanup EXIT HUP INT TERM
@@ -24,11 +32,20 @@ mkdir -p \
 	"$source_root/etc" \
 	"$source_root/sys/class/net/br-lan" \
 	"$fixture_root/etc/config" \
+	"$fixture_root/etc/init.d" \
 	"$fixture_root/etc" \
 	"$fixture_root/sys/class/net/br-lan" \
 	"$fixture_root/tmp/wrtbak/restore-cache" \
 	"$fixture_root/tmp/wrtbak/downloads" \
 	"$bin_dir"
+
+cat >"$fixture_root/etc/init.d/dnsmasq" <<'EOT'
+#!/bin/sh
+[ "$1" = "restart" ] || exit 2
+printf 'dnsmasq restarted\n' >> "${WRTBAK_ROOT%/}/tmp/wrtbak/dnsmasq-restart.log"
+exit 0
+EOT
+chmod +x "$fixture_root/etc/init.d/dnsmasq"
 
 cat >"$bin_dir/jsonfilter" <<'EOT'
 #!/bin/sh
@@ -73,11 +90,16 @@ for part in expr[2:].split("."):
             value = value[part[:-3]]
             if not isinstance(value, list):
                 sys.exit(1)
+            remaining = expr[2:].split(".")
+            tail = remaining[remaining.index(part) + 1:]
             for item in value:
-                if isinstance(item, bool):
-                    print("true" if item else "false")
-                elif item is not None:
-                    print(item)
+                current = item
+                for child in tail:
+                    current = current[child]
+                if isinstance(current, bool):
+                    print("true" if current else "false")
+                elif current is not None:
+                    print(current)
             sys.exit(0)
         value = value[part]
     except Exception:
@@ -94,6 +116,13 @@ else:
 PY
 EOT
 chmod +x "$bin_dir/jsonfilter"
+
+cat >"$bin_dir/sysupgrade" <<'EOT'
+#!/bin/sh
+printf '%s\n' "$*" > "${WRTBAK_SYSUPGRADE_LOG:-/tmp/wrtbak-sysupgrade.log}"
+exit "${WRTBAK_SYSUPGRADE_EXIT:-0}"
+EOT
+chmod +x "$bin_dir/sysupgrade"
 
 cat >"$source_root/etc/config/system" <<'EOT'
 config system
@@ -196,6 +225,121 @@ PATH="$bin_dir:$PATH" \
 
 cp "$source_archive" "$fixture_root$cache_archive"
 cp "$source_sysupgrade" "$fixture_root$cache_sysupgrade"
+
+python3 - "$source_archive" "$fixture_root$cache_service_archive" "$fixture_root$cache_mismatch_archive" "$fixture_root$cache_failure_archive" "$fixture_root$cache_unsafe_sysupgrade" <<'PY'
+import hashlib
+import io
+import json
+import os
+import tarfile
+import time
+import sys
+
+source, service_archive, mismatch_archive, failure_archive, unsafe_sysupgrade = sys.argv[1:]
+
+def read_archive(path):
+    entries = []
+    with tarfile.open(path, "r:gz") as archive:
+        for member in archive.getmembers():
+            data = archive.extractfile(member).read() if member.isfile() else None
+            entries.append((member, data))
+    return entries
+
+def write_archive(path, entries):
+    with tarfile.open(path, "w:gz") as archive:
+        for old, data in entries:
+            info = tarfile.TarInfo(old.name)
+            info.mtime = int(time.time())
+            info.mode = old.mode
+            info.type = old.type
+            if old.isdir():
+                archive.addfile(info)
+            else:
+                payload = data or b""
+                info.size = len(payload)
+                archive.addfile(info, io.BytesIO(payload))
+
+entries = read_archive(source)
+
+service_entries = []
+for member, data in entries:
+    if member.name == "manifest.json":
+        manifest = json.loads(data.decode())
+        manifest["restore"]["restart_services"] = ["network", "dnsmasq"]
+        data = json.dumps(manifest, indent=2).encode()
+    service_entries.append((member, data))
+write_archive(service_archive, service_entries)
+
+mismatch_entries = []
+for member, data in entries:
+    if member.name == "manifest.json":
+        manifest = json.loads(data.decode())
+        for item in manifest["files"]:
+            if item.get("archive_path") == "rootfs/etc/config/system":
+                item["sha256"] = "0" * 64
+        data = json.dumps(manifest, indent=2).encode()
+    mismatch_entries.append((member, data))
+write_archive(mismatch_archive, mismatch_entries)
+
+def add_file(archive, name, payload, mode=0o644):
+    info = tarfile.TarInfo(name)
+    info.mode = mode
+    info.size = len(payload)
+    info.mtime = int(time.time())
+    archive.addfile(info, io.BytesIO(payload))
+
+def add_dir(archive, name, mode=0o755):
+    info = tarfile.TarInfo(name)
+    info.type = tarfile.DIRTYPE
+    info.mode = mode
+    info.mtime = int(time.time())
+    archive.addfile(info)
+
+system_payload = b"config system\n\toption hostname 'failure-source'\n"
+blocked_payload = b"blocked\n"
+files = [
+    ("directory", "/etc", "rootfs/etc", "0755", None),
+    ("directory", "/etc/config", "rootfs/etc/config", "0755", None),
+    ("file", "/etc/config/system", "rootfs/etc/config/system", "0644", system_payload),
+    ("directory", "/zzblocked", "rootfs/zzblocked", "0755", None),
+    ("file", "/zzblocked/child", "rootfs/zzblocked/child", "0644", blocked_payload),
+]
+manifest_files = []
+for kind, target, archive_path, mode, payload in files:
+    row = {"path": target, "archive_path": archive_path, "type": kind, "mode": mode}
+    if payload is not None:
+        row["size"] = len(payload)
+        row["sha256"] = hashlib.sha256(payload).hexdigest()
+    manifest_files.append(row)
+manifest = {
+    "schema": "wrtbak/v1",
+    "profile": "write-failure",
+    "backup_id": "write-failure-1",
+    "created_at": "2026-06-26T00:00:00Z",
+    "tool_version": "0.1.0",
+    "device": {"hostname": "fixture", "board_model": "fixture"},
+    "firmware": {"distribution": "OpenWrt", "version": "test"},
+    "restore": {
+        "default_mode": "review-required",
+        "restart_services": ["dnsmasq"],
+        "reboot_recommended": False,
+        "requires_confirmation": True,
+    },
+    "files": manifest_files,
+}
+with tarfile.open(failure_archive, "w:gz") as archive:
+    add_file(archive, "manifest.json", json.dumps(manifest, indent=2).encode())
+    add_file(archive, "README.txt", b"failure fixture\n")
+    add_dir(archive, "rootfs")
+    add_dir(archive, "rootfs/etc")
+    add_dir(archive, "rootfs/etc/config")
+    add_file(archive, "rootfs/etc/config/system", system_payload)
+    add_dir(archive, "rootfs/zzblocked")
+    add_file(archive, "rootfs/zzblocked/child", blocked_payload)
+
+with tarfile.open(unsafe_sysupgrade, "w:gz") as archive:
+    add_file(archive, "../evil", b"unsafe\n")
+PY
 
 (cd "$fixture_root" && find . -print | sort) >"$work_dir/target-before.txt"
 run_cli restore-prepare --input "$cache_archive" --json >"$work_dir/prepare-wrtbak.json"
@@ -422,5 +566,204 @@ if PATH="$bin_dir:$PATH" WRTBAK_ROOT="$bad_root" WRTBAK_LIBDIR="$libdir" "$cli" 
 	exit 1
 fi
 assert_json_code "$work_dir/prebackup-mkdir-fail.json" prebackup_failed
+
+make_prebackup_variant() {
+	variant_path=$1
+	created_at=$2
+	host_device_id=$3
+	sha_mode=${4:-actual}
+	cp "$fixture_root$prebackup" "$fixture_root$variant_path"
+	python3 - "$fixture_root$variant_path" "$fixture_root$variant_path.receipt.json" "$variant_path" "$created_at" "$host_device_id" "$sha_mode" <<'PY'
+import hashlib
+import json
+import os
+import sys
+
+archive, receipt_path, logical_path, created_at, host_device_id, sha_mode = sys.argv[1:]
+with open(archive, "rb") as handle:
+    digest = hashlib.sha256(handle.read()).hexdigest()
+if sha_mode == "bad":
+    digest = "1" * 64
+receipt = {
+    "operation": "restore-prebackup",
+    "profile": "pre-restore",
+    "items": "all",
+    "format": "wrtbak",
+    "path": logical_path,
+    "filename": os.path.basename(logical_path),
+    "size": os.path.getsize(archive),
+    "sha256": digest,
+    "created_at": created_at,
+    "host_device_id": host_device_id,
+    "host_hostname": "fixture",
+}
+with open(receipt_path, "w", encoding="utf-8") as handle:
+    json.dump(receipt, handle)
+PY
+}
+
+current_device=$(python3 - "$work_dir/prebackup.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle)["host_device_id"])
+PY
+)
+make_prebackup_variant /tmp/wrtbak/pre-restore-stale.wrtbak 2000-01-01T00:00:00Z "$current_device"
+make_prebackup_variant /tmp/wrtbak/pre-restore-unrelated.wrtbak "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" unrelated-device
+make_prebackup_variant /tmp/wrtbak/pre-restore-badsha.wrtbak "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$current_device" bad
+
+assert_reject_code missing_confirmation restore-apply --input "$cache_archive" --mode all --items all --prebackup "$prebackup" --confirm NOPE --json
+assert_reject_code invalid_prebackup restore-apply --input "$cache_archive" --mode all --items all --prebackup /tmp/wrtbak/pre-restore-missing.wrtbak --confirm RESTORE --json
+assert_reject_code invalid_prebackup restore-apply --input "$cache_archive" --mode all --items all --prebackup /tmp/wrtbak/pre-restore-stale.wrtbak --confirm RESTORE --json
+assert_reject_code invalid_prebackup restore-apply --input "$cache_archive" --mode all --items all --prebackup /tmp/wrtbak/pre-restore-unrelated.wrtbak --confirm RESTORE --json
+assert_reject_code invalid_prebackup restore-apply --input "$cache_archive" --mode all --items all --prebackup /tmp/wrtbak/pre-restore-badsha.wrtbak --confirm RESTORE --json
+assert_reject_code missing_confirmation restore-sysupgrade --input "$cache_sysupgrade" --prebackup "$prebackup" --confirm NOPE --json
+assert_reject_code invalid_prebackup restore-sysupgrade --input "$cache_sysupgrade" --prebackup /tmp/wrtbak/pre-restore-stale.wrtbak --confirm RESTORE --json
+assert_reject_code invalid_prebackup restore-sysupgrade --input "$cache_sysupgrade" --prebackup /tmp/wrtbak/pre-restore-unrelated.wrtbak --confirm RESTORE --json
+assert_reject_code invalid_prebackup restore-sysupgrade --input "$cache_sysupgrade" --prebackup /tmp/wrtbak/pre-restore-badsha.wrtbak --confirm RESTORE --json
+assert_reject_code archive_mismatch restore-apply --input "$cache_mismatch_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --json
+assert_reject_code invalid_archive restore-sysupgrade --input "$cache_unsafe_sysupgrade" --prebackup "$prebackup" --confirm RESTORE --execute 0 --json
+
+cat >"$fixture_root/etc/config/system" <<'EOT'
+config system
+	option hostname 'target-router'
+	option note 'before-selected'
+EOT
+cat >"$fixture_root/etc/config/network" <<'EOT'
+config interface 'lan'
+	option proto 'dhcp'
+EOT
+run_cli restore-apply --input "$cache_archive" --mode selected --items network,wireguard --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json >"$work_dir/apply-selected.json"
+python3 - "$work_dir/apply-selected.json" "$cache_archive" "$prebackup" <<'PY'
+import json
+import sys
+
+path, archive, prebackup = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+assert data["ok"] is True
+assert data["operation"] == "restore-apply"
+assert data["input"] == archive
+assert data["mode"] == "selected"
+assert data["items"] == "network,wireguard"
+assert data["written_count"] == 1, data
+assert data["skipped_count"] >= 1, data
+assert data["prebackup_path"] == prebackup
+assert data["restore_log"].startswith("/tmp/wrtbak/restore-logs/restore-")
+assert "/etc/config/dhcp" in data["missing_from_archive"]
+assert "/etc/config/firewall" in data["missing_from_archive"]
+assert data["restarted_services"] == []
+PY
+grep -Fq "before-selected" "$fixture_root/etc/config/system"
+grep -Fq "192.0.2.10" "$fixture_root/etc/config/network"
+
+run_cli restore-apply --input "$cache_service_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 1 --json >"$work_dir/apply-all.json"
+python3 - "$work_dir/apply-all.json" "$cache_service_archive" <<'PY'
+import json
+import sys
+
+path, archive = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+assert data["ok"] is True
+assert data["operation"] == "restore-apply"
+assert data["input"] == archive
+assert data["mode"] == "all"
+assert data["written_count"] >= 2, data
+assert data["skipped_count"] == 0, data
+assert data["restart_services"] == ["network", "dnsmasq"], data
+assert data["restarted_services"] == ["dnsmasq"], data
+assert data["blocked_restart_services"] == ["network"], data
+assert data["restart_errors"] == [], data
+assert data["reboot_recommended"] is True
+PY
+grep -Fq "source-router" "$fixture_root/etc/config/system"
+grep -Fq "dnsmasq restarted" "$fixture_root/tmp/wrtbak/dnsmasq-restart.log"
+
+run_cli restore-prebackup --profile pre-restore --items all --format wrtbak --json >"$work_dir/prebackup-after-apply.json"
+prebackup=$(python3 - "$work_dir/prebackup-after-apply.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle)["path"])
+PY
+)
+
+run_cli restore-sysupgrade --input "$cache_sysupgrade" --prebackup "$prebackup" --confirm RESTORE --execute 0 --json >"$work_dir/sysupgrade-preflight.json"
+python3 - "$work_dir/sysupgrade-preflight.json" "$cache_sysupgrade" "$prebackup" <<'PY'
+import json
+import sys
+
+path, archive, prebackup = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+assert data["ok"] is True
+assert data["operation"] == "restore-sysupgrade"
+assert data["execute"] is False
+assert data["status"] == "preflight_only"
+assert data["input"] == archive
+assert data["prebackup_path"] == prebackup
+assert data["archive"]["filename"].endswith(".sysupgrade.tar.gz")
+assert data["manifest_present"] is True
+assert data["file_count"] >= 1
+assert data["total_bytes"] > 0
+assert data["compatibility"]["blocking"] is False
+assert data["sysupgrade_command"] == f"sysupgrade -r {archive}"
+assert data["reboot_recommended"] is True
+PY
+
+if WRTBAK_SYSUPGRADE_EXIT=7 WRTBAK_SYSUPGRADE_LOG="$work_dir/sysupgrade.log" run_cli restore-sysupgrade --input "$cache_sysupgrade" --prebackup "$prebackup" --confirm RESTORE --execute 1 --json >"$work_dir/sysupgrade-execute-fail.json"; then
+	echo "restore-sysupgrade execute should fail when sysupgrade exits 7" >&2
+	exit 1
+fi
+python3 - "$work_dir/sysupgrade-execute-fail.json" "$cache_sysupgrade" "$prebackup" <<'PY'
+import json
+import sys
+
+path, archive, prebackup = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+assert data == {
+    "ok": False,
+    "operation": "restore-sysupgrade",
+    "execute": True,
+    "status": "failed",
+    "code": "sysupgrade_failed",
+    "message": "sysupgrade restore failed",
+    "input": archive,
+    "prebackup_path": prebackup,
+    "sysupgrade_exit_code": 7,
+    "reboot_recommended": True,
+}, data
+PY
+grep -Fq "$fixture_root$cache_sysupgrade" "$work_dir/sysupgrade.log"
+
+: > "$fixture_root/zzblocked"
+if run_cli restore-apply --input "$cache_failure_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json >"$work_dir/apply-write-failure.json"; then
+	echo "restore-apply should fail when a target directory is blocked by a file" >&2
+	exit 1
+fi
+python3 - "$work_dir/apply-write-failure.json" "$fixture_root" <<'PY'
+import json
+import os
+import sys
+
+path, fixture_root = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+assert data["ok"] is False
+assert data["operation"] == "restore-apply"
+assert data["code"] == "write_failed"
+assert data["written_count"] >= 1, data
+assert data["failed_path"] == "/zzblocked"
+assert data["restore_log"].startswith("/tmp/wrtbak/restore-logs/restore-")
+assert os.path.isfile(fixture_root + data["restore_log"])
+PY
 
 echo "fixture restore apply prepare/prebackup test passed"

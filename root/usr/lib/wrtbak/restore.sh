@@ -136,6 +136,68 @@ wrtbak_restore_validate_prebackup_path() {
 	wrtbak_restore_validate_regular_file_path "$wrtbak_operation" invalid_prebackup "invalid prebackup path" "$wrtbak_prebackup" "$wrtbak_actual" || return 1
 }
 
+wrtbak_restore_receipt_value() {
+	wrtbak_receipt_file=$1
+	wrtbak_receipt_key=$2
+	wrtbak_receipt_default=${3:-}
+	wrtbak_jsonfilter_value "$wrtbak_receipt_file" "@.$wrtbak_receipt_key" "$wrtbak_receipt_default"
+}
+
+wrtbak_restore_date_seconds() {
+	wrtbak_date_value=$1
+	date -u -d "$wrtbak_date_value" '+%s' 2>/dev/null || return 1
+}
+
+wrtbak_restore_validate_receipt() {
+	wrtbak_prebackup=$1
+	wrtbak_restore_validate_prebackup_path "${wrtbak_restore_receipt_operation:-restore-apply}" "$wrtbak_prebackup" || return 1
+
+	wrtbak_receipt_path="$wrtbak_prebackup.receipt.json"
+	wrtbak_receipt_actual=$(wrtbak_root_path "$wrtbak_receipt_path")
+	if [ ! -f "$wrtbak_receipt_actual" ] || [ -L "$wrtbak_receipt_actual" ]; then
+		wrtbak_restore_invalid_json "$wrtbak_restore_receipt_operation" invalid_prebackup "invalid prebackup receipt" "$wrtbak_receipt_path"
+		return 1
+	fi
+
+	wrtbak_receipt_recorded_path=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" path "")
+	wrtbak_receipt_format=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" format "")
+	wrtbak_receipt_size=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" size "")
+	wrtbak_receipt_sha=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" sha256 "")
+	wrtbak_receipt_created=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" created_at "")
+	wrtbak_receipt_device=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" host_device_id "")
+	wrtbak_current_device=$(wrtbak_effective_device_id)
+	wrtbak_prebackup_actual=$(wrtbak_root_path "$wrtbak_prebackup")
+
+	if [ "$wrtbak_receipt_recorded_path" != "$wrtbak_prebackup" ] || [ "$wrtbak_receipt_format" != "wrtbak" ] || [ -z "$wrtbak_receipt_size" ] || [ -z "$wrtbak_receipt_sha" ] || [ -z "$wrtbak_receipt_created" ]; then
+		wrtbak_restore_invalid_json "$wrtbak_restore_receipt_operation" invalid_prebackup "invalid prebackup receipt" "$wrtbak_receipt_path"
+		return 1
+	fi
+
+	if [ "$wrtbak_receipt_device" != "$wrtbak_current_device" ]; then
+		wrtbak_restore_invalid_json "$wrtbak_restore_receipt_operation" invalid_prebackup "prebackup belongs to a different device" "$wrtbak_prebackup"
+		return 1
+	fi
+
+	wrtbak_actual_size=$(wrtbak_size_of "$wrtbak_prebackup_actual" 2>/dev/null || true)
+	wrtbak_actual_sha=$(wrtbak_sha256_of "$wrtbak_prebackup_actual" 2>/dev/null || true)
+	if [ "$wrtbak_actual_size" != "$wrtbak_receipt_size" ] || [ "$wrtbak_actual_sha" != "$wrtbak_receipt_sha" ]; then
+		wrtbak_restore_invalid_json "$wrtbak_restore_receipt_operation" invalid_prebackup "prebackup archive does not match receipt" "$wrtbak_prebackup"
+		return 1
+	fi
+
+	wrtbak_created_seconds=$(wrtbak_restore_date_seconds "$wrtbak_receipt_created" || true)
+	wrtbak_now_seconds=$(date -u '+%s')
+	if [ -z "$wrtbak_created_seconds" ] || [ "$wrtbak_created_seconds" -gt "$wrtbak_now_seconds" ]; then
+		wrtbak_restore_invalid_json "$wrtbak_restore_receipt_operation" invalid_prebackup "prebackup receipt timestamp is invalid" "$wrtbak_prebackup"
+		return 1
+	fi
+	wrtbak_age=$((wrtbak_now_seconds - wrtbak_created_seconds))
+	if [ "$wrtbak_age" -ge 86400 ]; then
+		wrtbak_restore_invalid_json "$wrtbak_restore_receipt_operation" invalid_prebackup "prebackup receipt is stale" "$wrtbak_prebackup"
+		return 1
+	fi
+}
+
 wrtbak_restore_json_file_array() {
 	wrtbak_file=$1
 
@@ -149,6 +211,25 @@ wrtbak_restore_json_file_array() {
 			printf ', '
 		fi
 		wrtbak_json_string "$wrtbak_value"
+	done < "$wrtbak_file"
+	printf ']'
+}
+
+wrtbak_restore_json_file_object_array() {
+	wrtbak_file=$1
+	printf '['
+	wrtbak_first=1
+	while IFS='|' read -r wrtbak_a wrtbak_b || [ -n "$wrtbak_a" ]; do
+		[ -n "$wrtbak_a" ] || continue
+		if [ "$wrtbak_first" -eq 1 ]; then
+			wrtbak_first=0
+		else
+			printf ', '
+		fi
+		printf '{'
+		printf '"service": '; wrtbak_json_string "$wrtbak_a"; printf ', '
+		printf '"error": '; wrtbak_json_string "$wrtbak_b"
+		printf '}'
 	done < "$wrtbak_file"
 	printf ']'
 }
@@ -175,6 +256,34 @@ wrtbak_restore_path_matches_item_path() {
 			;;
 	esac
 	return 1
+}
+
+wrtbak_restore_item_known() {
+	wrtbak_lookup_id=$1
+	wrtbak_known_item_rows | awk -F'|' -v id="$wrtbak_lookup_id" '$1 == id { found = 1 } END { exit found ? 0 : 1 }'
+}
+
+wrtbak_restore_validate_selected_items() {
+	wrtbak_items_value=$1
+	[ "$wrtbak_items_value" = "all" ] && return 0
+
+	wrtbak_old_ifs=$IFS
+	IFS=,
+	for wrtbak_item in $wrtbak_items_value; do
+		IFS=$wrtbak_old_ifs
+		wrtbak_item=$(printf '%s' "$wrtbak_item" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+		[ -n "$wrtbak_item" ] || {
+			IFS=,
+			continue
+		}
+		if ! wrtbak_restore_item_known "$wrtbak_item"; then
+			wrtbak_restore_invalid_json restore-apply invalid_items "unknown restore item" "$wrtbak_item"
+			IFS=$wrtbak_old_ifs
+			return 1
+		fi
+		IFS=,
+	done
+	IFS=$wrtbak_old_ifs
 }
 
 wrtbak_restore_annotate_path() {
@@ -628,6 +737,360 @@ wrtbak_restore_prebackup() {
 	printf '}\n'
 }
 
+wrtbak_restore_manifest_files_table() {
+	wrtbak_manifest=$1
+	wrtbak_output=$2
+	wrtbak_tmp_dir=$3
+
+	awk '
+		function json_string(line) {
+			sub(/^[^:]*:[[:space:]]*"/, "", line)
+			sub(/",?[[:space:]]*$/, "", line)
+			return line
+		}
+		function json_number(line) {
+			sub(/^[^:]*:[[:space:]]*/, "", line)
+			sub(/,?[[:space:]]*$/, "", line)
+			return line
+		}
+		function emit() {
+			if (archive_path != "") {
+				print archive_path "|" size "|" sha "|" type
+			}
+			archive_path = ""; size = ""; sha = ""; type = ""
+		}
+		/"files"[[:space:]]*:[[:space:]]*\[/ { in_files = 1; next }
+		in_files && /^  \]/ { emit(); in_files = 0; next }
+		!in_files { next }
+		/"archive_path"[[:space:]]*:/ { archive_path = json_string($0); next }
+		/"type"[[:space:]]*:/ { type = json_string($0); next }
+		/"size"[[:space:]]*:/ { size = json_number($0); next }
+		/"sha256"[[:space:]]*:/ { sha = json_string($0); next }
+		/^[[:space:]]*}[,]?[[:space:]]*$/ { emit(); next }
+	' "$wrtbak_manifest" > "$wrtbak_output"
+}
+
+wrtbak_restore_verify_manifest_files() {
+	wrtbak_extract=$1
+	wrtbak_table=$2
+	wrtbak_err=$3
+
+	while IFS='|' read -r wrtbak_archive_path wrtbak_size wrtbak_sha wrtbak_type || [ -n "$wrtbak_archive_path" ]; do
+		[ -n "$wrtbak_archive_path" ] || continue
+		case "$wrtbak_archive_path" in
+			rootfs/*)
+				;;
+			*)
+				printf 'manifest file outside rootfs: %s\n' "$wrtbak_archive_path" > "$wrtbak_err"
+				return 1
+				;;
+		esac
+		wrtbak_source="$wrtbak_extract/$wrtbak_archive_path"
+		if [ -d "$wrtbak_source" ]; then
+			continue
+		fi
+		case "$wrtbak_type" in
+			directory)
+				[ -d "$wrtbak_source" ] || {
+					printf 'manifest directory missing: %s\n' "$wrtbak_archive_path" > "$wrtbak_err"
+					return 1
+				}
+				;;
+			file|"")
+				if [ -d "$wrtbak_source" ] && [ -z "$wrtbak_size" ] && [ -z "$wrtbak_sha" ]; then
+					continue
+				fi
+				[ -f "$wrtbak_source" ] || {
+					printf 'manifest file missing: %s\n' "$wrtbak_archive_path" > "$wrtbak_err"
+					return 1
+				}
+				if [ -n "$wrtbak_size" ] && [ "$(wrtbak_size_of "$wrtbak_source")" != "$wrtbak_size" ]; then
+					printf 'manifest size mismatch: %s\n' "$wrtbak_archive_path" > "$wrtbak_err"
+					return 1
+				fi
+				if [ -n "$wrtbak_sha" ] && [ "$(wrtbak_sha256_of "$wrtbak_source")" != "$wrtbak_sha" ]; then
+					printf 'manifest sha256 mismatch: %s\n' "$wrtbak_archive_path" > "$wrtbak_err"
+					return 1
+				fi
+				;;
+			*)
+				printf 'manifest unsupported file type: %s\n' "$wrtbak_archive_path" > "$wrtbak_err"
+				return 1
+				;;
+		esac
+	done < "$wrtbak_table"
+}
+
+wrtbak_restore_build_archive_table() {
+	wrtbak_rootfs=$1
+	wrtbak_output=$2
+	wrtbak_work=$3
+	wrtbak_dirs="$wrtbak_work/apply-dirs.list"
+	wrtbak_files="$wrtbak_work/apply-files.list"
+	wrtbak_tab=$(printf '\t')
+
+	: > "$wrtbak_output"
+	(cd "$wrtbak_rootfs" && find . -mindepth 1 -type d -print | sort) > "$wrtbak_dirs" || return 1
+	while IFS= read -r wrtbak_rel || [ -n "$wrtbak_rel" ]; do
+		[ -n "$wrtbak_rel" ] || continue
+		wrtbak_child=${wrtbak_rel#./}
+		wrtbak_source="$wrtbak_rootfs/$wrtbak_child"
+		wrtbak_mode=$(wrtbak_mode_of "$wrtbak_source")
+		printf '/%s%sdir%s%s%s%s%srootfs/%s\n' "$wrtbak_child" "$wrtbak_tab" "$wrtbak_tab" "$wrtbak_mode" "$wrtbak_tab" "$wrtbak_tab" "$wrtbak_tab" "$wrtbak_child" >> "$wrtbak_output"
+	done < "$wrtbak_dirs"
+
+	(cd "$wrtbak_rootfs" && find . -type f -print | sort) > "$wrtbak_files" || return 1
+	while IFS= read -r wrtbak_rel || [ -n "$wrtbak_rel" ]; do
+		[ -n "$wrtbak_rel" ] || continue
+		wrtbak_child=${wrtbak_rel#./}
+		wrtbak_source="$wrtbak_rootfs/$wrtbak_child"
+		wrtbak_mode=$(wrtbak_mode_of "$wrtbak_source")
+		wrtbak_size=$(wrtbak_size_of "$wrtbak_source")
+		wrtbak_sha=$(wrtbak_sha256_of "$wrtbak_source")
+		printf '/%s%sfile%s%s%s%s%s%s%srootfs/%s\n' "$wrtbak_child" "$wrtbak_tab" "$wrtbak_tab" "$wrtbak_mode" "$wrtbak_tab" "$wrtbak_size" "$wrtbak_tab" "$wrtbak_sha" "$wrtbak_tab" "$wrtbak_child" >> "$wrtbak_output"
+	done < "$wrtbak_files"
+}
+
+wrtbak_restore_selected_contains() {
+	wrtbak_target=$1
+	wrtbak_selected_paths=$2
+	while IFS= read -r wrtbak_selected_path || [ -n "$wrtbak_selected_path" ]; do
+		[ -n "$wrtbak_selected_path" ] || continue
+		wrtbak_restore_path_matches_item_path "$wrtbak_target" "$wrtbak_selected_path" && return 0
+	done < "$wrtbak_selected_paths"
+	return 1
+}
+
+wrtbak_restore_target_in_archive() {
+	wrtbak_selected_path=$1
+	wrtbak_archive_table=$2
+	wrtbak_tab=$(printf '\t')
+	while IFS="$wrtbak_tab" read -r wrtbak_target wrtbak_type wrtbak_mode wrtbak_size wrtbak_sha wrtbak_archive_path || [ -n "$wrtbak_target" ]; do
+		[ -n "$wrtbak_target" ] || continue
+		wrtbak_restore_path_matches_item_path "$wrtbak_target" "$wrtbak_selected_path" && return 0
+	done < "$wrtbak_archive_table"
+	return 1
+}
+
+wrtbak_restore_filter_apply_table() {
+	wrtbak_mode=$1
+	wrtbak_selected_paths=$2
+	wrtbak_archive_table=$3
+	wrtbak_apply_table=$4
+	wrtbak_skipped=$5
+	wrtbak_missing=$6
+	wrtbak_tab=$(printf '\t')
+
+	: > "$wrtbak_apply_table"
+	: > "$wrtbak_skipped"
+	: > "$wrtbak_missing"
+
+	if [ "$wrtbak_mode" = "all" ]; then
+		sort -u "$wrtbak_archive_table" > "$wrtbak_apply_table"
+		return 0
+	fi
+
+	while IFS="$wrtbak_tab" read -r wrtbak_target wrtbak_type wrtbak_mode_value wrtbak_size wrtbak_sha wrtbak_archive_path || [ -n "$wrtbak_target" ]; do
+		[ -n "$wrtbak_target" ] || continue
+		if wrtbak_restore_selected_contains "$wrtbak_target" "$wrtbak_selected_paths"; then
+			printf '%s%s%s%s%s%s%s%s%s%s%s\n' "$wrtbak_target" "$wrtbak_tab" "$wrtbak_type" "$wrtbak_tab" "$wrtbak_mode_value" "$wrtbak_tab" "$wrtbak_size" "$wrtbak_tab" "$wrtbak_sha" "$wrtbak_tab" "$wrtbak_archive_path" >> "$wrtbak_apply_table"
+		else
+			printf '%s\n' "$wrtbak_target" >> "$wrtbak_skipped"
+		fi
+	done < "$wrtbak_archive_table"
+	sort -u "$wrtbak_apply_table" -o "$wrtbak_apply_table"
+	sort -u "$wrtbak_skipped" -o "$wrtbak_skipped"
+
+	while IFS= read -r wrtbak_selected_path || [ -n "$wrtbak_selected_path" ]; do
+		[ -n "$wrtbak_selected_path" ] || continue
+		if ! wrtbak_restore_target_in_archive "$wrtbak_selected_path" "$wrtbak_archive_table"; then
+			printf '%s\n' "$wrtbak_selected_path" >> "$wrtbak_missing"
+		fi
+	done < "$wrtbak_selected_paths"
+	sort -u "$wrtbak_missing" -o "$wrtbak_missing"
+}
+
+wrtbak_restore_log_dir() {
+	printf '%s\n' "$(wrtbak_root_path /tmp/wrtbak/restore-logs)"
+}
+
+wrtbak_restore_fsync_file() {
+	wrtbak_file=$1
+	if command -v sync >/dev/null 2>&1; then
+		sync "$wrtbak_file" 2>/dev/null || true
+	fi
+}
+
+wrtbak_restore_log_event() {
+	wrtbak_event_log=$1
+	wrtbak_event_target=$2
+	wrtbak_event_status=$3
+	wrtbak_event_source=$4
+	wrtbak_event_mode=$5
+	wrtbak_event_error=${6:-}
+	{
+		printf '{"timestamp":'; wrtbak_json_string "$(wrtbak_created_at)"
+		printf ',"operation":"restore-apply","target_path":'; wrtbak_json_string "$wrtbak_event_target"
+		printf ',"status":'; wrtbak_json_string "$wrtbak_event_status"
+		printf ',"source_path":'; wrtbak_json_string "$wrtbak_event_source"
+		printf ',"mode":'; wrtbak_json_string "$wrtbak_event_mode"
+		if [ -n "$wrtbak_event_error" ]; then
+			printf ',"error":'; wrtbak_json_string "$wrtbak_event_error"
+		fi
+		printf '}\n'
+	} >> "$wrtbak_event_log"
+}
+
+wrtbak_restore_write_one() {
+	wrtbak_extract=$1
+	wrtbak_target=$2
+	wrtbak_type=$3
+	wrtbak_mode=$4
+	wrtbak_archive_path=$5
+	wrtbak_log_dir=$6
+	wrtbak_write_log=$7
+	wrtbak_logical_mode=$8
+	wrtbak_actual=$(wrtbak_root_path "$wrtbak_target")
+	wrtbak_source="$wrtbak_extract/$wrtbak_archive_path"
+
+	case "$wrtbak_type" in
+		dir)
+			if [ -e "$wrtbak_actual" ] && [ ! -d "$wrtbak_actual" ]; then
+				wrtbak_restore_log_event "$wrtbak_write_log" "$wrtbak_target" failed "$wrtbak_archive_path" "$wrtbak_logical_mode" "target exists and is not a directory"
+				return 1
+			fi
+			mkdir -p "$wrtbak_actual" || {
+				wrtbak_restore_log_event "$wrtbak_write_log" "$wrtbak_target" failed "$wrtbak_archive_path" "$wrtbak_logical_mode" "cannot create directory"
+				return 1
+			}
+			chmod "$wrtbak_mode" "$wrtbak_actual" 2>/dev/null || true
+			wrtbak_restore_log_event "$wrtbak_write_log" "$wrtbak_target" written "$wrtbak_archive_path" "$wrtbak_logical_mode"
+			;;
+		file)
+			wrtbak_parent=$(dirname -- "$wrtbak_actual")
+			mkdir -p "$wrtbak_parent" || {
+				wrtbak_restore_log_event "$wrtbak_write_log" "$wrtbak_target" failed "$wrtbak_archive_path" "$wrtbak_logical_mode" "cannot create parent directory"
+				return 1
+			}
+			if [ -e "$wrtbak_actual" ]; then
+				wrtbak_backup_name=$(printf '%s' "$wrtbak_target" | sed 's#^/##;s#/#__#g')
+				cp -p "$wrtbak_actual" "$wrtbak_log_dir/previous-$wrtbak_backup_name" 2>/dev/null || true
+			fi
+			wrtbak_tmp_target="$wrtbak_actual.wrtbak-restore.$$"
+			rm -f "$wrtbak_tmp_target"
+			cp "$wrtbak_source" "$wrtbak_tmp_target" || {
+				rm -f "$wrtbak_tmp_target"
+				wrtbak_restore_log_event "$wrtbak_write_log" "$wrtbak_target" failed "$wrtbak_archive_path" "$wrtbak_logical_mode" "cannot copy temporary file"
+				return 1
+			}
+			chmod "$wrtbak_mode" "$wrtbak_tmp_target" 2>/dev/null || true
+			wrtbak_restore_fsync_file "$wrtbak_tmp_target"
+			mv "$wrtbak_tmp_target" "$wrtbak_actual" || {
+				rm -f "$wrtbak_tmp_target"
+				wrtbak_restore_log_event "$wrtbak_write_log" "$wrtbak_target" failed "$wrtbak_archive_path" "$wrtbak_logical_mode" "cannot rename temporary file"
+				return 1
+			}
+			wrtbak_restore_log_event "$wrtbak_write_log" "$wrtbak_target" written "$wrtbak_archive_path" "$wrtbak_logical_mode"
+			;;
+		*)
+			wrtbak_restore_log_event "$wrtbak_write_log" "$wrtbak_target" failed "$wrtbak_archive_path" "$wrtbak_logical_mode" "unsupported type"
+			return 1
+			;;
+	esac
+}
+
+wrtbak_restore_is_high_risk_service() {
+	case "$1" in
+		network|firewall|dropbear|tailscale|wireguard|nikki|mosdns)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+wrtbak_restore_handle_services() {
+	wrtbak_services=$1
+	wrtbak_restart_flag=$2
+	wrtbak_restarted=$3
+	wrtbak_blocked=$4
+	wrtbak_errors=$5
+
+	: > "$wrtbak_restarted"
+	: > "$wrtbak_blocked"
+	: > "$wrtbak_errors"
+	while IFS= read -r wrtbak_service || [ -n "$wrtbak_service" ]; do
+		[ -n "$wrtbak_service" ] || continue
+		if wrtbak_restore_is_high_risk_service "$wrtbak_service"; then
+			printf '%s\n' "$wrtbak_service" >> "$wrtbak_blocked"
+			continue
+		fi
+		[ "$wrtbak_restart_flag" = "1" ] || continue
+		wrtbak_init=$(wrtbak_root_path "/etc/init.d/$wrtbak_service")
+		if [ -x "$wrtbak_init" ]; then
+			if "$wrtbak_init" restart >/dev/null 2>&1; then
+				printf '%s\n' "$wrtbak_service" >> "$wrtbak_restarted"
+			else
+				printf '%s|restart failed\n' "$wrtbak_service" >> "$wrtbak_errors"
+			fi
+		else
+			printf '%s|init script not found\n' "$wrtbak_service" >> "$wrtbak_errors"
+		fi
+	done < "$wrtbak_services"
+	sort -u "$wrtbak_restarted" -o "$wrtbak_restarted"
+	sort -u "$wrtbak_blocked" -o "$wrtbak_blocked"
+}
+
+wrtbak_restore_emit_apply_success() {
+	wrtbak_input=$1
+	wrtbak_mode=$2
+	wrtbak_items=$3
+	wrtbak_written_count=$4
+	wrtbak_skipped_count=$5
+	wrtbak_prebackup=$6
+	wrtbak_log=$7
+	wrtbak_services=$8
+	wrtbak_restarted=$9
+	wrtbak_blocked=${10}
+	wrtbak_errors=${11}
+	wrtbak_reboot=${12}
+	wrtbak_missing=${13}
+
+	printf '{\n'
+	printf '  "ok": true,\n'
+	printf '  "operation": "restore-apply",\n'
+	printf '  "input": '; wrtbak_json_string "$wrtbak_input"; printf ',\n'
+	printf '  "mode": '; wrtbak_json_string "$wrtbak_mode"; printf ',\n'
+	printf '  "items": '; wrtbak_json_string "$wrtbak_items"; printf ',\n'
+	printf '  "written_count": %s,\n' "$wrtbak_written_count"
+	printf '  "skipped_count": %s,\n' "$wrtbak_skipped_count"
+	printf '  "prebackup_path": '; wrtbak_json_string "$wrtbak_prebackup"; printf ',\n'
+	printf '  "restore_log": '; wrtbak_json_string "$wrtbak_log"; printf ',\n'
+	printf '  "restart_services": '; wrtbak_restore_json_file_array "$wrtbak_services"; printf ',\n'
+	printf '  "restarted_services": '; wrtbak_restore_json_file_array "$wrtbak_restarted"; printf ',\n'
+	printf '  "blocked_restart_services": '; wrtbak_restore_json_file_array "$wrtbak_blocked"; printf ',\n'
+	printf '  "restart_errors": '; wrtbak_restore_json_file_object_array "$wrtbak_errors"; printf ',\n'
+	printf '  "reboot_recommended": '; wrtbak_json_bool "$wrtbak_reboot"; printf ',\n'
+	printf '  "missing_from_archive": '; wrtbak_restore_json_file_array "$wrtbak_missing"; printf '\n'
+	printf '}\n'
+}
+
+wrtbak_restore_emit_write_failed() {
+	wrtbak_input=$1
+	wrtbak_written_count=$2
+	wrtbak_failed_path=$3
+	wrtbak_log=$4
+	printf '{\n'
+	printf '  "ok": false,\n'
+	printf '  "operation": "restore-apply",\n'
+	printf '  "code": "write_failed",\n'
+	printf '  "message": "restore write failed",\n'
+	printf '  "input": '; wrtbak_json_string "$wrtbak_input"; printf ',\n'
+	printf '  "written_count": %s,\n' "$wrtbak_written_count"
+	printf '  "failed_path": '; wrtbak_json_string "$wrtbak_failed_path"; printf ',\n'
+	printf '  "restore_log": '; wrtbak_json_string "$wrtbak_log"; printf '\n'
+	printf '}\n'
+}
+
 wrtbak_restore_apply() {
 	wrtbak_input=$1
 	wrtbak_mode=$2
@@ -635,11 +1098,150 @@ wrtbak_restore_apply() {
 	wrtbak_prebackup=$4
 	wrtbak_confirm=$5
 	wrtbak_restart_services=$6
+	wrtbak_apply_mode=$wrtbak_mode
 
+	if [ "$wrtbak_confirm" != "RESTORE" ]; then
+		wrtbak_restore_invalid_json restore-apply missing_confirmation "restore confirmation is required" "$wrtbak_confirm"
+		return 1
+	fi
+	case "$wrtbak_apply_mode" in
+		all|selected)
+			;;
+		*)
+			wrtbak_restore_invalid_json restore-apply invalid_mode "restore mode must be all or selected" "$wrtbak_apply_mode"
+			return 1
+			;;
+	esac
+	case "$wrtbak_restart_services" in
+		0|1)
+			;;
+		*)
+			wrtbak_restore_invalid_json restore-apply invalid_restart_services "restart-services must be 0 or 1" "$wrtbak_restart_services"
+			return 1
+			;;
+	esac
+	wrtbak_restore_validate_selected_items "$wrtbak_items" || return 1
 	wrtbak_restore_validate_input_path restore-apply "$wrtbak_input" "wrtbak" || return 1
-	wrtbak_restore_validate_prebackup_path restore-apply "$wrtbak_prebackup" || return 1
-	wrtbak_restore_error_json restore-apply not_implemented "restore-apply is not implemented" "$wrtbak_mode:$wrtbak_items:$wrtbak_confirm:$wrtbak_restart_services"
-	return 1
+	wrtbak_restore_receipt_operation=restore-apply
+	wrtbak_restore_validate_receipt "$wrtbak_prebackup" || return 1
+
+	wrtbak_archive=$(wrtbak_root_path "$wrtbak_input")
+	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-restore-apply.XXXXXX") || {
+		wrtbak_restore_invalid_json restore-apply invalid_archive "cannot create temporary directory" ""
+		return 1
+	}
+	wrtbak_set_tmp_cleanup "$wrtbak_tmp"
+	wrtbak_members="$wrtbak_tmp/members.list"
+	wrtbak_metadata="$wrtbak_tmp/metadata.list"
+	wrtbak_extract="$wrtbak_tmp/extract"
+	wrtbak_manifest_table="$wrtbak_tmp/manifest-files.tbl"
+	wrtbak_archive_table="$wrtbak_tmp/archive.tbl"
+	wrtbak_selected_paths="$wrtbak_tmp/selected.paths"
+	wrtbak_apply_table="$wrtbak_tmp/apply.tbl"
+	wrtbak_skipped="$wrtbak_tmp/skipped.txt"
+	wrtbak_missing="$wrtbak_tmp/missing.txt"
+	wrtbak_services="$wrtbak_tmp/services.txt"
+	wrtbak_restarted="$wrtbak_tmp/restarted.txt"
+	wrtbak_blocked="$wrtbak_tmp/blocked.txt"
+	wrtbak_restart_errors="$wrtbak_tmp/restart-errors.txt"
+	wrtbak_err="$wrtbak_tmp/error.txt"
+	mkdir -p "$wrtbak_extract" || {
+		wrtbak_clear_tmp_cleanup
+		wrtbak_restore_invalid_json restore-apply invalid_archive "cannot create extract directory" ""
+		return 1
+	}
+
+	if ! (
+		wrtbak_validate_archive_metadata "$wrtbak_archive" "$wrtbak_members" "$wrtbak_metadata" &&
+		tar xzf "$wrtbak_archive" -C "$wrtbak_extract" &&
+		[ -f "$wrtbak_extract/manifest.json" ] &&
+		[ -d "$wrtbak_extract/rootfs" ] &&
+		wrtbak_validate_tree "$wrtbak_extract/rootfs" rootfs "$wrtbak_tmp" &&
+		wrtbak_agent_validate_manifest "$wrtbak_extract/manifest.json"
+	) 2>"$wrtbak_err"; then
+		wrtbak_detail=$(sed -n '1p' "$wrtbak_err")
+		wrtbak_clear_tmp_cleanup
+		wrtbak_restore_invalid_json restore-apply invalid_archive "restore archive is not valid" "$wrtbak_detail"
+		return 1
+	fi
+
+	wrtbak_restore_manifest_files_table "$wrtbak_extract/manifest.json" "$wrtbak_manifest_table" "$wrtbak_tmp"
+	if ! wrtbak_restore_verify_manifest_files "$wrtbak_extract" "$wrtbak_manifest_table" "$wrtbak_err"; then
+		wrtbak_detail=$(sed -n '1p' "$wrtbak_err")
+		wrtbak_clear_tmp_cleanup
+		wrtbak_restore_invalid_json restore-apply archive_mismatch "restore archive does not match manifest" "$wrtbak_detail"
+		return 1
+	fi
+
+	wrtbak_restore_build_archive_table "$wrtbak_extract/rootfs" "$wrtbak_archive_table" "$wrtbak_tmp" || {
+		wrtbak_clear_tmp_cleanup
+		wrtbak_restore_invalid_json restore-apply invalid_archive "cannot build restore file list" "$wrtbak_input"
+		return 1
+	}
+	if [ "$wrtbak_apply_mode" = "selected" ]; then
+		wrtbak_write_paths_for_items "$wrtbak_items" "$wrtbak_selected_paths"
+	else
+		: > "$wrtbak_selected_paths"
+	fi
+	wrtbak_restore_filter_apply_table "$wrtbak_apply_mode" "$wrtbak_selected_paths" "$wrtbak_archive_table" "$wrtbak_apply_table" "$wrtbak_skipped" "$wrtbak_missing"
+
+	wrtbak_log_dir=$(wrtbak_restore_log_dir)
+	mkdir -p "$wrtbak_log_dir" || {
+		wrtbak_clear_tmp_cleanup
+		wrtbak_restore_invalid_json restore-apply write_failed "cannot create restore log directory" "$wrtbak_log_dir"
+		return 1
+	}
+	wrtbak_log="/tmp/wrtbak/restore-logs/restore-$(wrtbak_compact_timestamp).jsonl"
+	wrtbak_log_actual=$(wrtbak_root_path "$wrtbak_log")
+	: > "$wrtbak_log_actual" || {
+		wrtbak_clear_tmp_cleanup
+		wrtbak_restore_invalid_json restore-apply write_failed "cannot create restore log" "$wrtbak_log"
+		return 1
+	}
+
+	wrtbak_written_count=0
+	wrtbak_failed_path=
+	wrtbak_tab=$(printf '\t')
+	while IFS="$wrtbak_tab" read -r wrtbak_target wrtbak_type wrtbak_entry_mode wrtbak_size wrtbak_sha wrtbak_archive_path || [ -n "$wrtbak_target" ]; do
+		[ -n "$wrtbak_target" ] || continue
+		if ! wrtbak_restore_write_one "$wrtbak_extract" "$wrtbak_target" "$wrtbak_type" "$wrtbak_entry_mode" "$wrtbak_archive_path" "$wrtbak_log_dir" "$wrtbak_log_actual" "$wrtbak_apply_mode"; then
+			wrtbak_failed_path=$wrtbak_target
+			wrtbak_restore_emit_write_failed "$wrtbak_input" "$wrtbak_written_count" "$wrtbak_failed_path" "$wrtbak_log"
+			wrtbak_clear_tmp_cleanup
+			return 1
+		fi
+		wrtbak_written_count=$((wrtbak_written_count + 1))
+	done < "$wrtbak_apply_table"
+
+	wrtbak_agent_restore_services "$wrtbak_extract/manifest.json" "$wrtbak_services"
+	wrtbak_restore_handle_services "$wrtbak_services" "$wrtbak_restart_services" "$wrtbak_restarted" "$wrtbak_blocked" "$wrtbak_restart_errors"
+	wrtbak_reboot=$(wrtbak_agent_restore_bool "$wrtbak_extract/manifest.json" reboot_recommended true)
+	if [ -s "$wrtbak_blocked" ]; then
+		wrtbak_reboot=true
+	fi
+	wrtbak_skipped_count=$(wc -l < "$wrtbak_skipped" | awk '{ print $1 }')
+	wrtbak_restore_emit_apply_success "$wrtbak_input" "$wrtbak_apply_mode" "$wrtbak_items" "$wrtbak_written_count" "$wrtbak_skipped_count" "$wrtbak_prebackup" "$wrtbak_log" "$wrtbak_services" "$wrtbak_restarted" "$wrtbak_blocked" "$wrtbak_restart_errors" "$wrtbak_reboot" "$wrtbak_missing"
+	wrtbak_clear_tmp_cleanup
+}
+
+wrtbak_restore_sysupgrade_inspect() {
+	wrtbak_archive=$1
+	wrtbak_extract=$2
+	wrtbak_work=$3
+	wrtbak_members="$wrtbak_work/sysupgrade-members.list"
+	wrtbak_metadata="$wrtbak_work/sysupgrade-metadata.list"
+	wrtbak_paths="$wrtbak_work/sysupgrade-paths.tsv"
+	wrtbak_summary="$wrtbak_work/sysupgrade-summary.txt"
+	wrtbak_err="$wrtbak_work/sysupgrade-error.txt"
+
+	if ! (
+		wrtbak_restore_sysupgrade_validate_metadata "$wrtbak_archive" "$wrtbak_members" "$wrtbak_metadata" &&
+		tar xzf "$wrtbak_archive" -C "$wrtbak_extract" &&
+		wrtbak_validate_tree "$wrtbak_extract" sysupgrade "$wrtbak_work"
+	) 2>"$wrtbak_err"; then
+		return 1
+	fi
+	wrtbak_restore_collect_tree_plan "$wrtbak_extract" "" sysupgrade-restore "$wrtbak_paths" "$wrtbak_summary" "$wrtbak_work"
 }
 
 wrtbak_restore_sysupgrade() {
@@ -648,8 +1250,120 @@ wrtbak_restore_sysupgrade() {
 	wrtbak_confirm=$3
 	wrtbak_execute=$4
 
+	if [ "$wrtbak_confirm" != "RESTORE" ]; then
+		wrtbak_restore_invalid_json restore-sysupgrade missing_confirmation "restore confirmation is required" "$wrtbak_confirm"
+		return 1
+	fi
+	case "$wrtbak_execute" in
+		0|1)
+			;;
+		*)
+			wrtbak_restore_invalid_json restore-sysupgrade invalid_execute "execute must be 0 or 1" "$wrtbak_execute"
+			return 1
+			;;
+	esac
 	wrtbak_restore_validate_input_path restore-sysupgrade "$wrtbak_input" "sysupgrade" || return 1
-	wrtbak_restore_validate_prebackup_path restore-sysupgrade "$wrtbak_prebackup" || return 1
-	wrtbak_restore_error_json restore-sysupgrade not_implemented "restore-sysupgrade is not implemented" "$wrtbak_confirm:$wrtbak_execute"
+	wrtbak_restore_receipt_operation=restore-sysupgrade
+	wrtbak_restore_validate_receipt "$wrtbak_prebackup" || return 1
+
+	wrtbak_archive=$(wrtbak_root_path "$wrtbak_input")
+	wrtbak_archive_size=$(wrtbak_size_of "$wrtbak_archive")
+	wrtbak_archive_sha=$(wrtbak_sha256_of "$wrtbak_archive")
+	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-restore-sysupgrade.XXXXXX") || {
+		wrtbak_restore_invalid_json restore-sysupgrade invalid_archive "cannot create temporary directory" ""
+		return 1
+	}
+	wrtbak_set_tmp_cleanup "$wrtbak_tmp"
+	wrtbak_extract="$wrtbak_tmp/extract"
+	mkdir -p "$wrtbak_extract" || {
+		wrtbak_clear_tmp_cleanup
+		wrtbak_restore_invalid_json restore-sysupgrade invalid_archive "cannot create extract directory" ""
+		return 1
+	}
+	if ! wrtbak_restore_sysupgrade_inspect "$wrtbak_archive" "$wrtbak_extract" "$wrtbak_tmp"; then
+		wrtbak_detail=$(sed -n '1p' "$wrtbak_tmp/sysupgrade-error.txt" 2>/dev/null || true)
+		wrtbak_clear_tmp_cleanup
+		wrtbak_restore_invalid_json restore-sysupgrade invalid_archive "sysupgrade archive is not valid" "$wrtbak_detail"
+		return 1
+	fi
+	wrtbak_manifest="$wrtbak_extract/etc/backup/wrtbak-manifest.json"
+	wrtbak_manifest_present=false
+	wrtbak_warnings_manifest_missing=true
+	if [ -f "$wrtbak_manifest" ]; then
+		if ! wrtbak_agent_validate_manifest "$wrtbak_manifest" 2>"$wrtbak_tmp/sysupgrade-error.txt"; then
+			wrtbak_detail=$(sed -n '1p' "$wrtbak_tmp/sysupgrade-error.txt" 2>/dev/null || true)
+			wrtbak_clear_tmp_cleanup
+			wrtbak_restore_invalid_json restore-sysupgrade invalid_archive "sysupgrade manifest is not valid" "$wrtbak_detail"
+			return 1
+		fi
+		wrtbak_manifest_present=true
+		wrtbak_warnings_manifest_missing=false
+	fi
+	set -- $(cat "$wrtbak_tmp/sysupgrade-summary.txt")
+	wrtbak_file_count=$1
+	wrtbak_total_bytes=$2
+
+	if [ "$wrtbak_execute" = "0" ]; then
+		printf '{\n'
+		printf '  "ok": true,\n'
+		printf '  "operation": "restore-sysupgrade",\n'
+		printf '  "execute": false,\n'
+		printf '  "status": "preflight_only",\n'
+		printf '  "input": '; wrtbak_json_string "$wrtbak_input"; printf ',\n'
+		printf '  "prebackup_path": '; wrtbak_json_string "$wrtbak_prebackup"; printf ',\n'
+		printf '  "archive": {\n'
+		printf '    "filename": '; wrtbak_json_string "$(basename -- "$wrtbak_input")"; printf ',\n'
+		printf '    "size": %s,\n' "$wrtbak_archive_size"
+		printf '    "sha256": '; wrtbak_json_string "$wrtbak_archive_sha"; printf '\n'
+		printf '  },\n'
+		printf '  "manifest_present": '; wrtbak_json_bool "$wrtbak_manifest_present"; printf ',\n'
+		printf '  "file_count": %s,\n' "$wrtbak_file_count"
+		printf '  "total_bytes": %s,\n' "$wrtbak_total_bytes"
+		printf '  "compatibility": {\n'
+		printf '    "blocking": false,\n'
+		if [ "$wrtbak_warnings_manifest_missing" = true ]; then
+			printf '    "warnings": [{"code":"manifest_missing","severity":"warning","message":"Sysupgrade archive does not include a wrtbak manifest."}]\n'
+		else
+			printf '    "warnings": []\n'
+		fi
+		printf '  },\n'
+		printf '  "sysupgrade_command": '; wrtbak_json_string "sysupgrade -r $wrtbak_input"; printf ',\n'
+		printf '  "reboot_recommended": true\n'
+		printf '}\n'
+		wrtbak_clear_tmp_cleanup
+		return 0
+	fi
+
+	set +e
+	sysupgrade -r "$wrtbak_archive"
+	wrtbak_exit=$?
+	set -e
+	if [ "$wrtbak_exit" -eq 0 ]; then
+		printf '{\n'
+		printf '  "ok": true,\n'
+		printf '  "operation": "restore-sysupgrade",\n'
+		printf '  "execute": true,\n'
+		printf '  "status": "completed",\n'
+		printf '  "input": '; wrtbak_json_string "$wrtbak_input"; printf ',\n'
+		printf '  "prebackup_path": '; wrtbak_json_string "$wrtbak_prebackup"; printf ',\n'
+		printf '  "sysupgrade_exit_code": 0,\n'
+		printf '  "reboot_recommended": true\n'
+		printf '}\n'
+		wrtbak_clear_tmp_cleanup
+		return 0
+	fi
+	printf '{\n'
+	printf '  "ok": false,\n'
+	printf '  "operation": "restore-sysupgrade",\n'
+	printf '  "execute": true,\n'
+	printf '  "status": "failed",\n'
+	printf '  "code": "sysupgrade_failed",\n'
+	printf '  "message": "sysupgrade restore failed",\n'
+	printf '  "input": '; wrtbak_json_string "$wrtbak_input"; printf ',\n'
+	printf '  "prebackup_path": '; wrtbak_json_string "$wrtbak_prebackup"; printf ',\n'
+	printf '  "sysupgrade_exit_code": %s,\n' "$wrtbak_exit"
+	printf '  "reboot_recommended": true\n'
+	printf '}\n'
+	wrtbak_clear_tmp_cleanup
 	return 1
 }
