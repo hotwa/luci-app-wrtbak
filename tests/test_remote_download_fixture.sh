@@ -400,7 +400,7 @@ if run_cli remote-download --target webdav --path "$webdav_prefix/wrtbak/2026/sa
 	echo "remote-download should fail unsupported suffixes" >&2
 	exit 1
 fi
-assert_error_code "$work_dir/unsupported-suffix.json" ""
+assert_error_code "$work_dir/unsupported-suffix.json" invalid_format
 
 WRTBAK_FAKE_SIZE_UNAVAILABLE=1
 if run_cli remote-download --target webdav --path "$webdav_prefix/wrtbak/2026/missing-size.wrtbak" --json >"$work_dir/missing-size.json"; then
@@ -460,5 +460,32 @@ while IFS= read -r config_path || [ -n "$config_path" ]; do
 		exit 1
 	}
 done < "$config_log"
+
+assert_sidecar_rename_failure_cleans_tmp() {
+	WRTBAK_ROOT="$fixture_root"
+	WRTBAK_LIBDIR="$libdir"
+	. "$libdir/common.sh"
+	. "$libdir/remote.sh"
+
+	sidecar_test_dir="$work_dir/sidecar-rename-failure"
+	mkdir -p "$sidecar_test_dir"
+	sidecar_local="$sidecar_test_dir/local.wrtbak"
+	sidecar_path="$sidecar_test_dir/local.wrtbak.remote.json"
+	sidecar_tmp="$sidecar_path.tmp.$$"
+	printf '%s' "$sample_content" > "$sidecar_local"
+	mkdir -p "$sidecar_path"
+	mkdir -p "$sidecar_path/$(basename -- "$sidecar_tmp")"
+
+	if wrtbak_remote_write_sidecar "$sidecar_path" "$sidecar_local" webdav curl "$webdav_sample" sample.wrtbak wrtbak "${#sample_content}" "Fri, 26 Jun 2026 03:30:00 GMT" "etag-1" 2>/dev/null; then
+		echo "sidecar write should fail when rename target blocks mv" >&2
+		exit 1
+	fi
+	if [ -e "$sidecar_tmp" ]; then
+		echo "sidecar temp file was not removed after rename failure" >&2
+		exit 1
+	fi
+}
+
+assert_sidecar_rename_failure_cleans_tmp
 
 echo "fixture remote download test passed"

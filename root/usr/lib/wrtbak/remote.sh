@@ -722,7 +722,10 @@ wrtbak_remote_write_sidecar() {
 		rm -f "$wrtbak_write_tmp"
 		return 1
 	}
-	mv -f "$wrtbak_write_tmp" "$wrtbak_write_sidecar"
+	if ! mv -f "$wrtbak_write_tmp" "$wrtbak_write_sidecar"; then
+		rm -f "$wrtbak_write_tmp"
+		return 1
+	fi
 }
 
 wrtbak_remote_download_success_json() {
@@ -779,7 +782,6 @@ wrtbak_remote_validate_backup_path() {
 			return 1
 			;;
 	esac
-	wrtbak_remote_format_for_path "$wrtbak_path" >/dev/null || return 1
 	printf '%s\n' "$wrtbak_path"
 }
 
@@ -879,7 +881,7 @@ wrtbak_remote_download() {
 			;;
 	esac
 	wrtbak_path=$(wrtbak_remote_validate_backup_path "$wrtbak_target" "$wrtbak_requested_path") || {
-		wrtbak_remote_error_json remote-download "$wrtbak_target" invalid_config "remote path is outside current device prefix or has unsupported suffix" ""
+		wrtbak_remote_error_json remote-download "$wrtbak_target" invalid_config "remote path is outside current device prefix" ""
 		return 1
 	}
 	wrtbak_format=$(wrtbak_remote_format_for_path "$wrtbak_path") || {
@@ -1290,6 +1292,10 @@ wrtbak_remote_delete() {
 	esac
 	wrtbak_path=$(wrtbak_remote_validate_backup_path "$wrtbak_target" "$wrtbak_path") || {
 		wrtbak_remote_error_json remote-delete "$wrtbak_target" invalid_config "remote path is outside current device prefix" ""
+		return 1
+	}
+	wrtbak_remote_format_for_path "$wrtbak_path" >/dev/null || {
+		wrtbak_remote_error_json remote-delete "$wrtbak_target" invalid_format "remote backup suffix is not supported" "$wrtbak_path"
 		return 1
 	}
 	if ! wrtbak_remote_lock_acquire; then
