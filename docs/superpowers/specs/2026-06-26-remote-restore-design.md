@@ -65,18 +65,31 @@ The restore review panel shows:
 The dangerous apply action is disabled until:
 
 - the archive has been downloaded successfully
-- `restore-plan --json` has succeeded
+- `restore-prepare --json` has succeeded
 - the pre-restore backup has succeeded
 - the user enters `RESTORE`
 
-After apply, LuCI displays:
+After `.wrtbak` apply, LuCI displays:
 
 - written file count
 - skipped file count
 - pre-restore backup path
 - restart services
+- restarted services
+- blocked high-risk restart services
 - reboot recommendation
 - restore log path
+
+After `.sysupgrade.tar.gz` restore, LuCI displays:
+
+- prebackup path
+- sysupgrade archive path
+- sysupgrade preflight status
+- sysupgrade command exit code when available
+- reboot or reconnect recommendation
+
+The sysupgrade path does not display `written_count`, `skipped_count`, or `restore_log`,
+because OpenWrt's native `sysupgrade -r` is the writer.
 
 ## CLI Commands
 
@@ -140,7 +153,7 @@ Runs all read-only checks needed before an apply:
 
 - validates that the local path is under the restore cache or `/tmp/wrtbak`
 - determines archive format from the filename and tar structure
-- for `.wrtbak`, validates `manifest.json` and `rootfs/`, then runs the same validation as `restore-plan --json`
+- for `.wrtbak`, validates `manifest.json` and `rootfs/`, then runs the same internal validation logic used by `restore-plan`
 - for `.sysupgrade.tar.gz`, validates root-relative tar members and reads `etc/backup/wrtbak-manifest.json` when present
 - computes compatibility warnings
 - creates no writes to the live root filesystem
@@ -373,8 +386,11 @@ JSON success shape:
   "skipped_count": 10,
   "prebackup_path": "/tmp/wrtbak/pre-restore-20260626T033000Z.wrtbak",
   "restore_log": "/tmp/wrtbak/restore-logs/restore-20260626T033100Z.jsonl",
-  "restart_services": [],
-  "reboot_recommended": false
+  "restart_services": ["network", "dnsmasq"],
+  "restarted_services": ["dnsmasq"],
+  "blocked_restart_services": ["network"],
+  "restart_errors": [],
+  "reboot_recommended": true
 }
 ```
 
@@ -382,8 +398,12 @@ Service handling:
 
 - The command returns the services recommended by the manifest.
 - By default it does not reboot.
-- It may restart non-network services automatically only when `--restart-services 1` is provided.
-- It does not automatically restart `network`, `firewall`, `dropbear`, `tailscale`, `wireguard`, `nikki`, or `mosdns` in v1 unless LuCI or the CLI call explicitly asks for service restart.
+- It may restart low-risk services automatically only when `--restart-services 1` is provided.
+- High-risk services are never restarted automatically in v1, even when `--restart-services 1` is provided.
+- High-risk services are `network`, `firewall`, `dropbear`, `tailscale`, `wireguard`, `nikki`, and `mosdns`.
+- High-risk services are reported in `blocked_restart_services`.
+- Automatically restarted low-risk services are reported in `restarted_services`.
+- If a low-risk service restart fails after file writes succeeded, the restore remains `ok:true`; the failed restart is reported in `restart_errors` and LuCI shows manual action required.
 - When high-risk services are present, the JSON must include `reboot_recommended:true`.
 
 ### `restore-sysupgrade`
@@ -401,9 +421,55 @@ Rules:
 - Validates the prebackup receipt the same way as `restore-apply`.
 - Runs sysupgrade-specific `tar tzf` safety validation before invoking `sysupgrade -r`.
 - Does not attempt file-level selective restore.
-- Prints a JSON preflight result and exits unless `--execute 1` is provided.
-- With `--execute 1`, invokes `sysupgrade -r LOCAL_ARCHIVE` after printing the preflight JSON.
+- With `--execute 0`, prints a JSON preflight result and exits without writing live configuration.
+- With `--execute 1`, invokes `sysupgrade -r LOCAL_ARCHIVE` after validation and returns success or failure JSON when the management connection survives.
 - LuCI must warn that the current management session can be interrupted.
+
+Preflight-only JSON success shape for `--execute 0`:
+
+```json
+{
+  "ok": true,
+  "operation": "restore-sysupgrade",
+  "execute": false,
+  "status": "preflight_only",
+  "input": "/tmp/wrtbak/restore-cache/abc-backup.sysupgrade.tar.gz",
+  "prebackup_path": "/tmp/wrtbak/pre-restore-20260626T033000Z.wrtbak",
+  "archive": {
+    "filename": "backup.sysupgrade.tar.gz",
+    "size": 12345,
+    "sha256": "..."
+  },
+  "manifest_present": true,
+  "file_count": 12,
+  "total_bytes": 34567,
+  "compatibility": {
+    "blocking": false,
+    "warnings": []
+  },
+  "sysupgrade_command": "sysupgrade -r /tmp/wrtbak/restore-cache/abc-backup.sysupgrade.tar.gz",
+  "reboot_recommended": true
+}
+```
+
+Execute JSON success shape for `--execute 1` when `sysupgrade -r` returns:
+
+```json
+{
+  "ok": true,
+  "operation": "restore-sysupgrade",
+  "execute": true,
+  "status": "completed",
+  "input": "/tmp/wrtbak/restore-cache/abc-backup.sysupgrade.tar.gz",
+  "prebackup_path": "/tmp/wrtbak/pre-restore-20260626T033000Z.wrtbak",
+  "sysupgrade_exit_code": 0,
+  "reboot_recommended": true
+}
+```
+
+If the management connection drops during native restore, LuCI may not receive the execute success JSON.
+In that case LuCI treats the result as unknown after confirmed handoff and tells the operator to reconnect and inspect router state.
+If `sysupgrade -r` returns a non-zero code, the command returns `ok:false` with `code:"sysupgrade_failed"` and `sysupgrade_exit_code`.
 
 Sysupgrade validation:
 
@@ -508,9 +574,23 @@ Write exec permissions:
 - `/usr/bin/wrtbak restore-apply *`
 - `/usr/bin/wrtbak restore-sysupgrade *`
 
-The existing broad read/stat ACL for `/tmp/wrtbak/*` must be narrowed.
-LuCI download still needs read/stat for generated local archives, but restore cache sidecars should not be directly browsable.
-Replace `/tmp/wrtbak/*` with explicit patterns for generated downloadable archives and avoid granting direct file ACLs for `/tmp/wrtbak/restore-cache/*`.
+The existing broad read/stat ACL for `/tmp/wrtbak/*` must be removed.
+LuCI download still needs read/stat for generated local archives, but restore cache archives and sidecars must not be directly browsable.
+To keep those surfaces separate, generated browser-download archives move to `/tmp/wrtbak/downloads/`.
+Replace `/tmp/wrtbak/*` with these exact read/stat patterns:
+
+- `/tmp/wrtbak/downloads/*.wrtbak`
+- `/tmp/wrtbak/downloads/*.sysupgrade.tar.gz`
+
+Do not grant read/stat ACLs for these paths:
+
+- `/tmp/wrtbak/*.wrtbak`
+- `/tmp/wrtbak/*.sysupgrade.tar.gz`
+- `/tmp/wrtbak/restore-cache/*`
+- `/tmp/wrtbak/restore-logs/*`
+- `/tmp/wrtbak/*.remote.json`
+- `/tmp/wrtbak/*.receipt.json`
+
 LuCI interacts with cache files only through `wrtbak` commands.
 `tests/test_luci_layout.sh` must assert that the broad `/tmp/wrtbak/*` ACL is absent.
 
@@ -544,8 +624,10 @@ Local fixture tests:
 - `restore-sysupgrade` rejects non-sysupgrade input
 - `restore-sysupgrade` parses and honors `--execute 0|1`
 - `restore-sysupgrade` rejects unsafe sysupgrade tar members
-- high-risk service restart is blocked unless explicitly requested
+- high-risk services are never automatically restarted and are reported in `blocked_restart_services`
 - LuCI ACL tests verify `/tmp/wrtbak/*` broad read/stat access was removed
+- LuCI ACL tests verify only `/tmp/wrtbak/downloads/*.wrtbak` and `/tmp/wrtbak/downloads/*.sysupgrade.tar.gz` are readable
+- LuCI ACL tests verify restore cache, restore log, sidecar, and receipt patterns are not readable
 - LuCI layout contains restore buttons, review panel, confirmation input, and apply buttons
 - LuCI tests verify prepare, prebackup, and apply command argument mapping
 
