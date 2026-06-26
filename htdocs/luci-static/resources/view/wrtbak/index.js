@@ -7,14 +7,29 @@
 
 function parseJsonOutput(res) {
 	var text = (res && res.stdout) ? res.stdout.trim() : '';
+	var data = null;
 
-	if (res && res.code)
-		throw new Error((res.stderr || text || _('Command failed')).trim());
+	if (text) {
+		try {
+			data = JSON.parse(text);
+		} catch (err) {
+			if (res && res.code)
+				throw new Error((res.stderr || text || _('Command failed')).trim());
 
-	if (!text)
+			throw err;
+		}
+	}
+
+	if (res && res.code) {
+		var error = new Error((data && data.message) || (res.stderr || text || _('Command failed')).trim());
+		error.data = data;
+		throw error;
+	}
+
+	if (!data)
 		throw new Error(_('Command returned no data'));
 
-	return JSON.parse(text);
+	return data;
 }
 
 function runWrtbak(args) {
@@ -180,7 +195,7 @@ function remoteTargetDriver(target) {
 	return target === 'webdav' ? 'curl' : 'rclone';
 }
 
-function renderBackupRows(table, backups, onDelete) {
+function renderBackupRows(table, backups, onDelete, onRestore) {
 	table.innerHTML = '';
 	table.appendChild(E('tr', { 'class': 'tr table-titles' }, [
 		E('th', { 'class': 'th' }, _('File')),
@@ -203,11 +218,19 @@ function renderBackupRows(table, backups, onDelete) {
 			E('td', { 'class': 'td' }, backup.format || '-'),
 			E('td', { 'class': 'td' }, backup.size == null ? '-' : String(backup.size)),
 			E('td', { 'class': 'td' }, backup.modified || '-'),
-			E('td', { 'class': 'td right' }, E('button', {
-				type: 'button',
-				'class': 'btn cbi-button cbi-button-negative',
-				click: function() { onDelete(backup); }
-			}, _('Delete')))
+			E('td', { 'class': 'td right' }, [
+				E('button', {
+					type: 'button',
+					'class': 'btn cbi-button cbi-button-action',
+					click: function() { onRestore(backup); }
+				}, backup.format === 'sysupgrade' ? _('Restore via sysupgrade') : _('Restore')),
+				' ',
+				E('button', {
+					type: 'button',
+					'class': 'btn cbi-button cbi-button-negative',
+					click: function() { onDelete(backup); }
+				}, _('Delete'))
+			])
 		]));
 	});
 }
@@ -291,6 +314,14 @@ return view.extend({
 		var resultPanel = E('div', { 'class': 'alert-message info', style: 'display:none' });
 		var remotePanel = E('div', { 'class': 'alert-message info', style: 'display:none' });
 		var remoteTable = E('table', { 'class': 'table wrtbak-remote-table' });
+		var restoreState = { phase: 'idle', target: null, backup: null, download: null, prepare: null, prebackup: null, apply: null, sysupgradePreflight: null, error: null, unknown: false };
+		var restorePanel = E('div', { 'class': 'cbi-section wrtbak-restore-panel' });
+		var confirmationInput = textInput('wrtbak-restore-confirmation', '');
+		var prebackupButton;
+		var applyButton;
+		var applyAllButton;
+		var sysupgradePreflightButton;
+		var sysupgradeExecuteButton;
 		var previousButton;
 		var nextButton;
 		var table = E('table', { 'class': 'table' }, [
@@ -390,6 +421,216 @@ return view.extend({
 			return defaultTarget.value || 'default';
 		}
 
+		function restoreInputPath() {
+			return restoreState.download && restoreState.download.local_path;
+		}
+
+		function isSysupgradeRestore() {
+			return restoreState.prepare && restoreState.prepare.format === 'sysupgrade';
+		}
+
+		function canRunConfirmedRestore() {
+			return restoreState.phase === 'prebackup_ready' && confirmationInput.value === 'RESTORE' && restoreState.prebackup && restoreState.prebackup.path;
+		}
+
+		function updateRestoreButtons() {
+			if (!prebackupButton || !applyButton)
+				return;
+
+			prebackupButton.disabled = restoreState.phase !== 'prepared';
+			applyButton.disabled = restoreState.phase !== 'prebackup_ready' || confirmationInput.value !== 'RESTORE' || isSysupgradeRestore();
+			applyAllButton.disabled = restoreState.phase !== 'prebackup_ready' || confirmationInput.value !== 'RESTORE' || isSysupgradeRestore();
+			sysupgradePreflightButton.disabled = restoreState.phase !== 'prebackup_ready' || confirmationInput.value !== 'RESTORE' || !isSysupgradeRestore();
+			sysupgradeExecuteButton.disabled = restoreState.phase !== 'prebackup_ready' || confirmationInput.value !== 'RESTORE' || !restoreState.sysupgradePreflight || !isSysupgradeRestore();
+		}
+
+		function resetRestoreState() {
+			restoreState.phase = 'idle';
+			restoreState.target = null;
+			restoreState.backup = null;
+			restoreState.download = null;
+			restoreState.prepare = null;
+			restoreState.prebackup = null;
+			restoreState.apply = null;
+			restoreState.sysupgradePreflight = null;
+			restoreState.error = null;
+			restoreState.unknown = false;
+			confirmationInput.value = '';
+			renderRestorePanel();
+		}
+
+		function setRestorePhase(phase) {
+			restoreState.phase = phase;
+			renderRestorePanel();
+		}
+
+		function appendJsonList(parent, title, values) {
+			var list = Array.isArray(values) ? values : [];
+			parent.appendChild(E('p', {}, [
+				E('strong', {}, title),
+				': ',
+				list.length ? list.join(', ') : '-'
+			]));
+		}
+
+		function appendRestorePlan(parent, prepare) {
+			var plan = prepare && prepare.plan ? prepare.plan : {};
+			var paths = Array.isArray(plan.paths) ? plan.paths : [];
+
+			parent.appendChild(E('p', {}, [
+				E('strong', {}, _('Archive')),
+				': ',
+				(prepare && prepare.format) || '-',
+				' ',
+				(prepare && prepare.archive && prepare.archive.filename) || ''
+			]));
+			parent.appendChild(E('p', {}, [
+				E('strong', {}, _('Source')),
+				': ',
+				(prepare && prepare.source_device && prepare.source_device.hostname) || '-',
+				' / ',
+				(prepare && prepare.source_device && prepare.source_device.board) || '-'
+			]));
+			parent.appendChild(E('p', {}, [
+				E('strong', {}, _('Files')),
+				': ',
+				String(plan.file_count || 0),
+				' / ',
+				String(plan.total_bytes || 0),
+				' bytes'
+			]));
+			appendJsonList(parent, _('Restart services'), plan.restart_services);
+
+			if (prepare && prepare.compatibility && Array.isArray(prepare.compatibility.warnings) && prepare.compatibility.warnings.length) {
+				parent.appendChild(E('ul', { 'class': 'wrtbak-restore-warnings' }, prepare.compatibility.warnings.map(function(warning) {
+					return E('li', {}, warning.message || warning.code || String(warning));
+				})));
+			}
+
+			if (paths.length) {
+				parent.appendChild(E('table', { 'class': 'table wrtbak-restore-paths' }, [
+					E('tr', { 'class': 'tr table-titles' }, [
+						E('th', { 'class': 'th' }, _('Path')),
+						E('th', { 'class': 'th' }, _('Type')),
+						E('th', { 'class': 'th' }, _('Action'))
+					])
+				]));
+				var pathTable = parent.lastChild;
+				paths.slice(0, 20).forEach(function(path) {
+					pathTable.appendChild(E('tr', { 'class': 'tr' }, [
+						E('td', { 'class': 'td' }, E('code', {}, path.path || '-')),
+						E('td', { 'class': 'td' }, path.type || '-'),
+						E('td', { 'class': 'td' }, path.action || '-')
+					]));
+				});
+			}
+		}
+
+		function appendApplyResult(parent, result) {
+			if (!result)
+				return;
+
+			if (result.code === 'sysupgrade_failed') {
+				parent.appendChild(E('div', { 'class': 'alert-message warning' }, String.format('%s: %s', _('Sysupgrade failed'), result.sysupgrade_exit_code)));
+				return;
+			}
+
+			if (result.operation === 'restore-sysupgrade') {
+				parent.appendChild(E('p', {}, [
+					E('strong', {}, _('Sysupgrade')),
+					': ',
+					result.status || '-',
+					' / ',
+					_('exit'),
+					' ',
+					String(result.sysupgrade_exit_code == null ? '-' : result.sysupgrade_exit_code)
+				]));
+				return;
+			}
+
+			parent.appendChild(E('p', {}, [
+				E('strong', {}, _('Written')),
+				': ',
+				String(result.written_count || 0),
+				' / ',
+				_('skipped'),
+				' ',
+				String(result.skipped_count || 0)
+			]));
+			appendJsonList(parent, 'blocked_restart_services', result.blocked_restart_services);
+			appendJsonList(parent, _('Restarted services'), result.restarted_services);
+			appendJsonList(parent, _('Missing from archive'), result.missing_from_archive);
+			if (result.restore_log)
+				parent.appendChild(E('p', {}, [ E('strong', {}, _('Restore log')), ': ', E('code', {}, result.restore_log) ]));
+		}
+
+		function renderRestorePanel() {
+			restorePanel.innerHTML = '';
+			restorePanel.appendChild(E('h3', {}, _('Restore review')));
+
+			if (restoreState.phase === 'idle') {
+				restorePanel.appendChild(E('p', {}, _('No restore selected.')));
+				updateRestoreButtons();
+				return;
+			}
+
+			restorePanel.appendChild(E('p', {}, [
+				E('strong', {}, _('Status')),
+				': ',
+				restoreState.phase
+			]));
+
+			if (restoreState.backup) {
+				restorePanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Remote path')),
+					': ',
+					E('code', {}, restoreState.backup.path || restoreState.backup.filename || '-')
+				]));
+			}
+
+			if (restoreState.download) {
+				restorePanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Local path')),
+					': ',
+					E('code', {}, restoreState.download.local_path || '-')
+				]));
+			}
+
+			if (restoreState.prepare)
+				appendRestorePlan(restorePanel, restoreState.prepare);
+
+			if (restoreState.prebackup) {
+				restorePanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Pre-restore backup')),
+					': ',
+					E('code', {}, restoreState.prebackup.path || '-')
+				]));
+			}
+
+			if (restoreState.apply)
+				appendApplyResult(restorePanel, restoreState.apply);
+
+			if (restoreState.error)
+				restorePanel.appendChild(E('div', { 'class': 'alert-message danger' }, restoreState.error));
+
+			if (restoreState.unknown)
+				restorePanel.appendChild(E('div', { 'class': 'alert-message warning wrtbak-restore-unknown' }, _('Restore handoff status is unknown. Reconnect and inspect router state.')));
+
+			restorePanel.appendChild(field('wrtbak-restore-confirmation', _('Confirmation'), confirmationInput));
+			restorePanel.appendChild(E('div', { 'class': 'cbi-page-actions' }, [
+				prebackupButton,
+				' ',
+				applyButton,
+				' ',
+				applyAllButton,
+				' ',
+				sysupgradePreflightButton,
+				' ',
+				sysupgradeExecuteButton
+			]));
+			updateRestoreButtons();
+		}
+
 		function backupArgs(root) {
 			var ids = selectedItems(root);
 			var name = profile.value.trim();
@@ -407,7 +648,103 @@ return view.extend({
 			};
 		}
 
+		function failRestore(err, unknown) {
+			restoreState.apply = err && err.data ? err.data : restoreState.apply;
+			restoreState.error = err && err.data ? (err.data.message || err.data.code) : ((err && err.message) || String(err));
+			restoreState.unknown = unknown === true;
+			setRestorePhase('failed');
+			ui.addNotification(null, E('p', {}, restoreState.error), 'danger');
+		}
+
+		function restoreBackup(backup) {
+			restoreState.phase = 'downloading';
+			restoreState.target = selectedTarget();
+			restoreState.backup = backup;
+			restoreState.download = null;
+			restoreState.prepare = null;
+			restoreState.prebackup = null;
+			restoreState.apply = null;
+			restoreState.sysupgradePreflight = null;
+			restoreState.error = null;
+			restoreState.unknown = false;
+			confirmationInput.value = '';
+			renderRestorePanel();
+
+			return runWrtbak([ 'remote-download', '--target', selectedTarget(), '--path', backup.path, '--json' ]).then(function(download) {
+				restoreState.download = download;
+				return runWrtbak([ 'restore-prepare', '--input', download.local_path, '--json' ]);
+			}).then(function(prepare) {
+				restoreState.prepare = prepare;
+				setRestorePhase('prepared');
+				ui.addNotification(null, E('p', {}, _('Restore archive prepared.')), 'info');
+			}).catch(function(err) {
+				failRestore(err);
+			});
+		}
+
+		function createPrebackup() {
+			if (restoreState.phase !== 'prepared')
+				return Promise.resolve();
+
+			return runWrtbak([ 'restore-prebackup', '--profile', 'pre-restore', '--items', 'all', '--format', 'wrtbak', '--json' ]).then(function(prebackup) {
+				restoreState.prebackup = prebackup;
+				setRestorePhase('prebackup_ready');
+				ui.addNotification(null, E('p', {}, _('Pre-restore backup created.')), 'info');
+			}).catch(function(err) {
+				failRestore(err);
+			});
+		}
+
+		function applyWrtbak(mode, itemsValue) {
+			if (!canRunConfirmedRestore())
+				return Promise.resolve();
+
+			setRestorePhase('applying');
+			return runWrtbak([ 'restore-apply', '--input', restoreInputPath(), '--mode', mode, '--items', itemsValue, '--prebackup', restoreState.prebackup.path, '--confirm', 'RESTORE', '--restart-services', '0', '--json' ]).then(function(result) {
+				restoreState.apply = result;
+				setRestorePhase('applied');
+				ui.addNotification(null, E('p', {}, _('Restore completed.')), 'info');
+			}).catch(function(err) {
+				failRestore(err);
+			});
+		}
+
+		function preflightSysupgrade() {
+			if (!canRunConfirmedRestore())
+				return Promise.resolve();
+
+			return runWrtbak([ 'restore-sysupgrade', '--input', restoreInputPath(), '--prebackup', restoreState.prebackup.path, '--confirm', 'RESTORE', '--execute', '0', '--json' ]).then(function(result) {
+				restoreState.sysupgradePreflight = result;
+				restoreState.apply = result;
+				setRestorePhase('prebackup_ready');
+				ui.addNotification(null, E('p', {}, _('Sysupgrade preflight completed.')), 'info');
+			}).catch(function(err) {
+				failRestore(err);
+			});
+		}
+
+		function executeSysupgrade() {
+			if (!canRunConfirmedRestore() || !restoreState.sysupgradePreflight)
+				return Promise.resolve();
+
+			setRestorePhase('applying');
+			return runWrtbak([ 'restore-sysupgrade', '--input', restoreInputPath(), '--prebackup', restoreState.prebackup.path, '--confirm', 'RESTORE', '--execute', '1', '--json' ]).then(function(result) {
+				restoreState.apply = result;
+				setRestorePhase('applied');
+				ui.addNotification(null, E('p', {}, _('Sysupgrade restore handed off.')), 'info');
+			}).catch(function(err) {
+				if (!err.data) {
+					failRestore(err, true);
+					return;
+				}
+				if (err.data.code === 'sysupgrade_failed')
+					restoreState.apply = err.data;
+				failRestore(err);
+			});
+		}
+
 		function listRemoteBackups() {
+			resetRestoreState();
 			return runWrtbak([ 'remote-list', '--target', selectedTarget(), '--json' ]).then(function(result) {
 				remotePanel.style.display = '';
 				remotePanel.textContent = String.format('%s: %s', _('Remote target'), remoteTargetDriver(result.target));
@@ -418,7 +755,7 @@ return view.extend({
 					}).catch(function(err) {
 						ui.addNotification(null, E('p', {}, err.message || String(err)), 'danger');
 					});
-				});
+				}, restoreBackup);
 			});
 		}
 
@@ -531,6 +868,43 @@ return view.extend({
 			})
 		}, _('Apply schedule'));
 
+		confirmationInput.addEventListener('input', updateRestoreButtons);
+
+		prebackupButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-action',
+			click: ui.createHandlerFn(this, createPrebackup)
+		}, _('Create pre-restore backup'));
+
+		applyButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-positive',
+			click: ui.createHandlerFn(this, function() {
+				return applyWrtbak('selected', 'core-system');
+			})
+		}, _('Apply core system'));
+
+		applyAllButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-negative',
+			click: ui.createHandlerFn(this, function() {
+				return applyWrtbak('all', 'all');
+			})
+		}, _('Apply all'));
+
+		sysupgradePreflightButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button',
+			click: ui.createHandlerFn(this, preflightSysupgrade)
+		}, _('Sysupgrade preflight'));
+
+		sysupgradeExecuteButton = E('button', {
+			id: 'wrtbak-sysupgrade-execute',
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-negative wrtbak-sysupgrade-execute',
+			click: ui.createHandlerFn(this, executeSysupgrade)
+		}, _('Execute sysupgrade restore'));
+
 		var page = E('div', { 'class': 'wrtbak-page' }, [
 			E('h2', {}, _('Wrtbak')),
 			E('div', { 'class': 'cbi-section' }, [
@@ -580,12 +954,14 @@ return view.extend({
 			E('div', { 'class': 'cbi-section wrtbak-remote-backups' }, [
 				E('h3', {}, _('Remote backups')),
 				remotePanel,
-				remoteTable
+				remoteTable,
+				restorePanel
 			])
 		]);
 
 		updatePagination(rows, pagination, pageSize, pageSummary, previousButton, nextButton);
-		renderBackupRows(remoteTable, [], function() {});
+		renderBackupRows(remoteTable, [], function() {}, function() {});
+		renderRestorePanel();
 
 		return page;
 	}

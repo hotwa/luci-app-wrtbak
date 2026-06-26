@@ -88,7 +88,20 @@ grep -Fq "runWrtbak([ 'remote-test'" "$view_file"
 grep -Fq "runWrtbak([ 'remote-upload'" "$view_file"
 grep -Fq "runWrtbak([ 'remote-list'" "$view_file"
 grep -Fq "runWrtbak([ 'remote-delete'" "$view_file"
+grep -Fq "runWrtbak([ 'remote-download'" "$view_file"
+grep -Fq "runWrtbak([ 'restore-prepare'" "$view_file"
+grep -Fq "runWrtbak([ 'restore-prebackup'" "$view_file"
+grep -Fq "runWrtbak([ 'restore-apply'" "$view_file"
+grep -Fq "runWrtbak([ 'restore-sysupgrade'" "$view_file"
 grep -Fq "runWrtbak([ 'schedule-apply', '--json' ])" "$view_file"
+grep -Fq "RESTORE" "$view_file"
+grep -Fq "wrtbak-restore-panel" "$view_file"
+grep -Fq "restoreState.phase === 'prebackup_ready'" "$view_file"
+grep -Fq "confirmationInput.value === 'RESTORE'" "$view_file"
+grep -Fq "blocked_restart_services" "$view_file"
+grep -Fq "sysupgrade_failed" "$view_file"
+grep -Fq "wrtbak-sysupgrade-execute" "$view_file"
+grep -Fq "wrtbak-restore-unknown" "$view_file"
 grep -Fq "uci.set('wrtbak', 'webdav'" "$view_file"
 grep -Fq "uci.set('wrtbak', 's3'" "$view_file"
 grep -Fq "uci.set('wrtbak', 'auto'" "$view_file"
@@ -110,5 +123,31 @@ grep -Fq "handleReset: null" "$view_file"
 grep -Fq "wrtbak-profile" "$view_file"
 grep -Fq "wrtbak_profile" "$view_file"
 grep -Fq "[A-Za-z0-9._\\\\-]+" "$view_file"
+
+python3 - "$view_file" <<'PY'
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    view = handle.read()
+
+for snippet in [
+    "'remote-download', '--target', selectedTarget(), '--path'",
+    "'restore-prepare', '--input'",
+    "'restore-prebackup', '--profile', 'pre-restore', '--items', 'all', '--format', 'wrtbak'",
+    "'restore-apply', '--input'",
+    "'--prebackup', restoreState.prebackup.path",
+    "'--confirm', 'RESTORE'",
+    "'--restart-services', '0'",
+    "'restore-sysupgrade', '--input'",
+    "'--execute', '0'",
+    "'--execute', '1'",
+    "applyButton.disabled = restoreState.phase !== 'prebackup_ready'",
+    "confirmationInput.value === 'RESTORE'",
+    "sysupgrade_exit_code",
+    "wrtbak-restore-unknown",
+    "restoreState.phase = 'idle'",
+]:
+    assert snippet in view, snippet
+PY
 
 echo "LuCI layout test passed"
