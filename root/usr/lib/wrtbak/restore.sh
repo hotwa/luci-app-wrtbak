@@ -38,7 +38,7 @@ wrtbak_restore_input_format() {
 			printf 'sysupgrade\n'
 			return 0
 			;;
-		/tmp/wrtbak/restore-cache/*.wrtbak|/tmp/wrtbak/downloads/*.wrtbak|/tmp/wrtbak/pre-restore-*.wrtbak)
+		/tmp/wrtbak/restore-cache/*.wrtbak|/tmp/wrtbak/downloads/*.wrtbak)
 			printf 'wrtbak\n'
 			return 0
 			;;
@@ -55,6 +55,32 @@ wrtbak_restore_expected_format_allowed() {
 			;;
 	esac
 	return 1
+}
+
+wrtbak_restore_has_symlink_component() {
+	wrtbak_check_path=$1
+	wrtbak_check_dir=$(dirname -- "$wrtbak_check_path") || return 0
+
+	while [ "$wrtbak_check_dir" != "/" ] && [ -n "$wrtbak_check_dir" ]; do
+		[ -L "$wrtbak_check_dir" ] && return 0
+		wrtbak_parent=$(dirname -- "$wrtbak_check_dir") || return 0
+		[ "$wrtbak_parent" != "$wrtbak_check_dir" ] || break
+		wrtbak_check_dir=$wrtbak_parent
+	done
+	return 1
+}
+
+wrtbak_restore_validate_regular_file_path() {
+	wrtbak_operation=$1
+	wrtbak_code=$2
+	wrtbak_message=$3
+	wrtbak_logical_path=$4
+	wrtbak_actual_path=$5
+
+	if wrtbak_restore_has_symlink_component "$wrtbak_actual_path" || [ -L "$wrtbak_actual_path" ] || [ ! -f "$wrtbak_actual_path" ]; then
+		wrtbak_restore_invalid_json "$wrtbak_operation" "$wrtbak_code" "$wrtbak_message" "$wrtbak_logical_path"
+		return 1
+	fi
 }
 
 wrtbak_restore_validate_input_path() {
@@ -83,10 +109,7 @@ wrtbak_restore_validate_input_path() {
 	fi
 
 	wrtbak_actual=$(wrtbak_root_path "$wrtbak_input")
-	if [ -L "$wrtbak_actual" ] || [ ! -f "$wrtbak_actual" ]; then
-		wrtbak_restore_invalid_json "$wrtbak_operation" invalid_input_path "invalid restore input path" "$wrtbak_input"
-		return 1
-	fi
+	wrtbak_restore_validate_regular_file_path "$wrtbak_operation" invalid_input_path "invalid restore input path" "$wrtbak_input" "$wrtbak_actual" || return 1
 
 	wrtbak_restore_validated_format=$wrtbak_format
 }
@@ -110,10 +133,7 @@ wrtbak_restore_validate_prebackup_path() {
 	fi
 
 	wrtbak_actual=$(wrtbak_root_path "$wrtbak_prebackup")
-	if [ -L "$wrtbak_actual" ] || [ ! -f "$wrtbak_actual" ]; then
-		wrtbak_restore_invalid_json "$wrtbak_operation" invalid_prebackup "invalid prebackup path" "$wrtbak_prebackup"
-		return 1
-	fi
+	wrtbak_restore_validate_regular_file_path "$wrtbak_operation" invalid_prebackup "invalid prebackup path" "$wrtbak_prebackup" "$wrtbak_actual" || return 1
 }
 
 wrtbak_restore_json_file_array() {
@@ -552,8 +572,11 @@ wrtbak_restore_prebackup() {
 	wrtbak_err="${TMPDIR:-/tmp}/wrtbak-prebackup-error.$$"
 	rm -f "$wrtbak_err"
 
-	wrtbak_mkdir_parent "$wrtbak_actual"
-	if ! wrtbak_created_archive=$(wrtbak_create_archive "$wrtbak_profile" "$wrtbak_actual" 2>"$wrtbak_err"); then
+	if ! mkdir -p "$(dirname -- "$wrtbak_actual")" 2>/dev/null; then
+		wrtbak_restore_invalid_json restore-prebackup prebackup_failed "failed to create prebackup directory" "$wrtbak_path"
+		return 1
+	fi
+	if ! wrtbak_created_archive=$(wrtbak_create_archive "$wrtbak_profile" "$wrtbak_actual" "$wrtbak_items" 2>"$wrtbak_err"); then
 		wrtbak_detail=$(sed -n '1p' "$wrtbak_err" 2>/dev/null || true)
 		rm -f "$wrtbak_err"
 		wrtbak_restore_invalid_json restore-prebackup prebackup_failed "failed to create pre-restore backup" "$wrtbak_detail"
@@ -562,20 +585,28 @@ wrtbak_restore_prebackup() {
 	rm -f "$wrtbak_err"
 
 	[ "$wrtbak_created_archive" = "$wrtbak_actual" ] || true
-	wrtbak_size=$(wrtbak_size_of "$wrtbak_actual")
-	wrtbak_sha=$(wrtbak_sha256_of "$wrtbak_actual")
+	wrtbak_size=$(wrtbak_size_of "$wrtbak_actual" 2>/dev/null) || {
+		rm -f "$wrtbak_actual"
+		wrtbak_restore_invalid_json restore-prebackup prebackup_failed "failed to stat prebackup archive" "$wrtbak_path"
+		return 1
+	}
+	wrtbak_sha=$(wrtbak_sha256_of "$wrtbak_actual") || {
+		rm -f "$wrtbak_actual"
+		wrtbak_restore_invalid_json restore-prebackup prebackup_failed "failed to hash prebackup archive" "$wrtbak_path"
+		return 1
+	}
 	wrtbak_host_device_id=$(wrtbak_effective_device_id)
 	wrtbak_host_hostname=$(wrtbak_hostname)
 	wrtbak_receipt_tmp="$wrtbak_receipt_actual.$$"
 
 	wrtbak_restore_receipt_json "$wrtbak_receipt_tmp" restore-prebackup "$wrtbak_profile" "$wrtbak_items" "$wrtbak_format" "$wrtbak_path" "$wrtbak_filename" "$wrtbak_size" "$wrtbak_sha" "$wrtbak_created" "$wrtbak_host_device_id" "$wrtbak_host_hostname" || {
-		rm -f "$wrtbak_receipt_tmp"
+		rm -f "$wrtbak_receipt_tmp" "$wrtbak_actual"
 		wrtbak_restore_invalid_json restore-prebackup prebackup_failed "failed to write prebackup receipt" "$wrtbak_receipt_path"
 		return 1
 	}
 	chmod 600 "$wrtbak_receipt_tmp" 2>/dev/null || true
 	mv "$wrtbak_receipt_tmp" "$wrtbak_receipt_actual" || {
-		rm -f "$wrtbak_receipt_tmp"
+		rm -f "$wrtbak_receipt_tmp" "$wrtbak_actual"
 		wrtbak_restore_invalid_json restore-prebackup prebackup_failed "failed to write prebackup receipt" "$wrtbak_receipt_path"
 		return 1
 	}

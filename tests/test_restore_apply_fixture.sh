@@ -163,6 +163,12 @@ assert_reject_code() {
 		exit 1
 	fi
 
+	assert_json_code "$output_file" "$expected_code"
+}
+
+assert_json_code() {
+	output_file=$1
+	expected_code=$2
 	python3 - "$output_file" "$expected_code" <<'PY'
 import json
 import sys
@@ -351,15 +357,69 @@ ln -s "$fixture_root$cache_archive" "$fixture_root/tmp/wrtbak/restore-cache/link
 mkdir -p "$fixture_root/tmp/wrtbak/restore-cache/directory.wrtbak"
 cp "$source_archive" "$fixture_root/tmp/wrtbak/restore-cache/bad.txt"
 cp "$source_archive" "$fixture_root/tmp/wrtbak/pre-restore-invalid-name.wrtbak"
+mkdir -p "$work_dir/outside-downloads"
+rm -rf "$fixture_root/tmp/wrtbak/downloads"
+ln -s "$work_dir/outside-downloads" "$fixture_root/tmp/wrtbak/downloads"
+cp "$source_archive" "$work_dir/outside-downloads/escaped.wrtbak"
 
 assert_reject_code invalid_input_path restore-prepare --input relative.wrtbak --json
 assert_reject_code invalid_input_path restore-prepare --input /tmp/wrtbak/restore-cache/../bad.wrtbak --json
 assert_reject_code invalid_input_path restore-prepare --input /tmp/wrtbak/restore-cache/link.wrtbak --json
+assert_reject_code invalid_input_path restore-prepare --input /tmp/wrtbak/downloads/escaped.wrtbak --json
+assert_reject_code invalid_input_path restore-prepare --input "$prebackup" --json
 assert_reject_code invalid_input_path restore-prepare --input /etc/config/system --json
 assert_reject_code invalid_input_path restore-prepare --input /tmp/wrtbak/restore-cache/directory.wrtbak --json
 assert_reject_code invalid_input_path restore-prepare --input /tmp/wrtbak/restore-cache/bad.txt --json
 assert_reject_code invalid_prebackup restore-apply --input "$cache_archive" --mode all --items all --prebackup /etc/config/system --confirm RESTORE --json
 assert_reject_code invalid_input_path restore-apply --input "$cache_sysupgrade" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --json
 assert_reject_code invalid_input_path restore-sysupgrade --input "$cache_archive" --prebackup "$prebackup" --confirm RESTORE --json
+
+fake_prebackup_bin="$work_dir/fake-prebackup-bin"
+mkdir -p "$fake_prebackup_bin"
+cat >"$fake_prebackup_bin/date" <<'EOT'
+#!/bin/sh
+if [ "${1:-}" = "-u" ]; then
+	case "${2:-}" in
+		+%Y-%m-%dT%H:%M:%SZ)
+			printf '%s\n' "2030-01-02T03:04:05Z"
+			exit 0
+			;;
+		+%Y%m%dT%H%M%SZ)
+			printf '%s\n' "20300102T030405Z"
+			exit 0
+			;;
+	esac
+fi
+exec /usr/bin/date "$@"
+EOT
+cat >"$fake_prebackup_bin/sha256sum" <<'EOT'
+#!/bin/sh
+case "${1:-}" in
+	*/tmp/wrtbak/pre-restore-*.wrtbak)
+		exit 99
+		;;
+esac
+exec /usr/bin/sha256sum "$@"
+EOT
+chmod +x "$fake_prebackup_bin/date" "$fake_prebackup_bin/sha256sum"
+
+if PATH="$fake_prebackup_bin:$PATH" run_cli restore-prebackup --profile pre-restore --items all --format wrtbak --json >"$work_dir/prebackup-hash-fail.json"; then
+	echo "restore-prebackup should fail when archive hash fails" >&2
+	exit 1
+fi
+assert_json_code "$work_dir/prebackup-hash-fail.json" prebackup_failed
+if [ -e "$fixture_root/tmp/wrtbak/pre-restore-20300102T030405Z.wrtbak" ]; then
+	echo "failed prebackup left an orphan archive" >&2
+	exit 1
+fi
+
+bad_root="$work_dir/bad-root"
+mkdir -p "$bad_root/tmp"
+: > "$bad_root/tmp/wrtbak"
+if PATH="$bin_dir:$PATH" WRTBAK_ROOT="$bad_root" WRTBAK_LIBDIR="$libdir" "$cli" restore-prebackup --profile pre-restore --items all --format wrtbak --json >"$work_dir/prebackup-mkdir-fail.json"; then
+	echo "restore-prebackup should fail when prebackup directory cannot be created" >&2
+	exit 1
+fi
+assert_json_code "$work_dir/prebackup-mkdir-fail.json" prebackup_failed
 
 echo "fixture restore apply prepare/prebackup test passed"
