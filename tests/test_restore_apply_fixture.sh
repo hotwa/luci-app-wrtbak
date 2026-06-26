@@ -371,6 +371,7 @@ assert_reject_code invalid_input_path restore-prepare --input /etc/config/system
 assert_reject_code invalid_input_path restore-prepare --input /tmp/wrtbak/restore-cache/directory.wrtbak --json
 assert_reject_code invalid_input_path restore-prepare --input /tmp/wrtbak/restore-cache/bad.txt --json
 assert_reject_code invalid_prebackup restore-apply --input "$cache_archive" --mode all --items all --prebackup /etc/config/system --confirm RESTORE --json
+assert_reject_code invalid_input_path restore-apply --input "$prebackup" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --json
 assert_reject_code invalid_input_path restore-apply --input "$cache_sysupgrade" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --json
 assert_reject_code invalid_input_path restore-sysupgrade --input "$cache_archive" --prebackup "$prebackup" --confirm RESTORE --json
 
