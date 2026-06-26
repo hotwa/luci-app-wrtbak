@@ -28,6 +28,12 @@
 				],
 				"/usr/bin/wrtbak remote-list *": [
 					"exec"
+				],
+				"/usr/bin/wrtbak remote-download *": [
+					"exec"
+				],
+				"/usr/bin/wrtbak restore-prepare *": [
+					"exec"
 				]
 			},
 			"ubus": {
@@ -63,6 +69,15 @@
 					"exec"
 				],
 				"/usr/bin/wrtbak remote-prune *": [
+					"exec"
+				],
+				"/usr/bin/wrtbak restore-prebackup *": [
+					"exec"
+				],
+				"/usr/bin/wrtbak restore-apply *": [
+					"exec"
+				],
+				"/usr/bin/wrtbak restore-sysupgrade *": [
 					"exec"
 				],
 				"/usr/bin/wrtbak schedule-apply --json": [

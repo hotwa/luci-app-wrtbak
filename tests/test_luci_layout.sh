@@ -35,6 +35,51 @@ grep -Fq '"/tmp/wrtbak/downloads/*.sysupgrade.tar.gz"' "$acl_file"
 ! grep -Fq '"/tmp/wrtbak/*.remote.json"' "$acl_file"
 ! grep -Fq '"/tmp/wrtbak/*.receipt.json"' "$acl_file"
 
+python3 - "$acl_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    acl = json.load(handle)["luci-app-wrtbak"]
+
+read_file = acl["read"]["file"]
+write_file = acl["write"]["file"]
+
+for command in [
+    "/usr/bin/wrtbak remote-download *",
+    "/usr/bin/wrtbak restore-prepare *",
+]:
+    assert command in read_file, command
+    assert read_file[command] == ["exec"], command
+    assert command not in write_file, command
+
+for command in [
+    "/usr/bin/wrtbak restore-prebackup *",
+    "/usr/bin/wrtbak restore-apply *",
+    "/usr/bin/wrtbak restore-sysupgrade *",
+]:
+    assert command in write_file, command
+    assert write_file[command] == ["exec"], command
+    assert command not in read_file, command
+
+for pattern in [
+    "/tmp/wrtbak/downloads/*.wrtbak",
+    "/tmp/wrtbak/downloads/*.sysupgrade.tar.gz",
+]:
+    assert read_file.get(pattern) == ["read", "stat"], pattern
+
+for forbidden in [
+    "/tmp/wrtbak/*",
+    "/tmp/wrtbak/*.wrtbak",
+    "/tmp/wrtbak/*.sysupgrade.tar.gz",
+    "/tmp/wrtbak/restore-cache/*",
+    "/tmp/wrtbak/restore-logs/*",
+    "/tmp/wrtbak/*.remote.json",
+    "/tmp/wrtbak/*.receipt.json",
+]:
+    assert forbidden not in read_file, forbidden
+PY
+
 grep -Fq "'require uci'" "$view_file"
 grep -Fq "runWrtbak([ 'detect', '--json' ])" "$view_file"
 grep -Fq "runWrtbak([ 'remote-status', '--json' ])" "$view_file"

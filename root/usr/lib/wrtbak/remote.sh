@@ -639,6 +639,11 @@ wrtbak_remote_validate_backup_path() {
 	printf '%s\n' "$wrtbak_path"
 }
 
+wrtbak_remote_download() {
+	wrtbak_remote_error_json remote-download "$1" not_implemented "remote-download is not implemented" "$2"
+	return 1
+}
+
 wrtbak_remote_create_local_archive() {
 	wrtbak_profile=$1
 	wrtbak_items=$2
