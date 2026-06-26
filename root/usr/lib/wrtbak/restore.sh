@@ -293,7 +293,7 @@ wrtbak_restore_annotate_path() {
 
 	: > "$wrtbak_items_out"
 	printf 'false\n' > "$wrtbak_sensitive_out"
-	wrtbak_known_item_rows | while IFS='|' read -r wrtbak_id wrtbak_label wrtbak_category wrtbak_packages wrtbak_paths wrtbak_services wrtbak_sensitive wrtbak_selected wrtbak_description; do
+	wrtbak_known_item_rows | while IFS='|' read -r wrtbak_id wrtbak_label wrtbak_category wrtbak_packages wrtbak_paths wrtbak_restore_item_services wrtbak_sensitive wrtbak_selected wrtbak_description; do
 		for wrtbak_item_path in $wrtbak_paths; do
 			if wrtbak_restore_path_matches_item_path "$wrtbak_target" "$wrtbak_item_path"; then
 				printf '%s\n' "$wrtbak_id" >> "$wrtbak_items_out"

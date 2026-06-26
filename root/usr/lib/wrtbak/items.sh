@@ -81,7 +81,7 @@ wrtbak_installed_luci_apps() {
 }
 
 wrtbak_known_package_ids() {
-	wrtbak_known_item_rows | while IFS='|' read -r wrtbak_id wrtbak_label wrtbak_category wrtbak_packages wrtbak_paths wrtbak_services wrtbak_sensitive wrtbak_selected wrtbak_description; do
+	wrtbak_known_item_rows | while IFS='|' read -r wrtbak_id wrtbak_label wrtbak_category wrtbak_packages wrtbak_paths wrtbak_item_row_services wrtbak_sensitive wrtbak_selected wrtbak_description; do
 		[ -n "$wrtbak_packages" ] || continue
 		wrtbak_old_ifs=$IFS
 		IFS=,
@@ -185,13 +185,13 @@ wrtbak_detect_items_json() {
 	printf '  "items": [\n'
 
 	wrtbak_detect_first=1
-	while IFS='|' read -r wrtbak_id wrtbak_label wrtbak_category wrtbak_packages wrtbak_paths wrtbak_services wrtbak_sensitive wrtbak_selected wrtbak_description; do
+	while IFS='|' read -r wrtbak_id wrtbak_label wrtbak_category wrtbak_packages wrtbak_paths wrtbak_item_row_services wrtbak_sensitive wrtbak_selected wrtbak_description; do
 		wrtbak_installed=false
 		if [ -z "$wrtbak_packages" ] || wrtbak_any_package_installed "$wrtbak_packages" || wrtbak_any_path_exists "$wrtbak_paths"; then
 			wrtbak_installed=true
 		fi
 
-		wrtbak_detect_emit_item "$wrtbak_id" "$wrtbak_label" "$wrtbak_category" "$wrtbak_installed" true "$wrtbak_sensitive" "$wrtbak_selected" "$wrtbak_paths" "$wrtbak_services" "$wrtbak_description"
+		wrtbak_detect_emit_item "$wrtbak_id" "$wrtbak_label" "$wrtbak_category" "$wrtbak_installed" true "$wrtbak_sensitive" "$wrtbak_selected" "$wrtbak_paths" "$wrtbak_item_row_services" "$wrtbak_description"
 	done < "$wrtbak_known_rows"
 
 	while IFS= read -r wrtbak_pkg || [ -n "$wrtbak_pkg" ]; do
@@ -213,7 +213,7 @@ wrtbak_item_paths_by_id() {
 	wrtbak_lookup_id=$1
 	wrtbak_known_rows=$(mktemp "${TMPDIR:-/tmp}/wrtbak-known.XXXXXX") || wrtbak_die "cannot create temporary file"
 	wrtbak_known_item_rows > "$wrtbak_known_rows"
-	while IFS='|' read -r wrtbak_id wrtbak_label wrtbak_category wrtbak_packages wrtbak_paths wrtbak_services wrtbak_sensitive wrtbak_selected wrtbak_description; do
+	while IFS='|' read -r wrtbak_id wrtbak_label wrtbak_category wrtbak_packages wrtbak_paths wrtbak_item_row_services wrtbak_sensitive wrtbak_selected wrtbak_description; do
 		if [ "$wrtbak_id" = "$wrtbak_lookup_id" ]; then
 			for wrtbak_path in $wrtbak_paths; do
 				printf '%s\n' "$wrtbak_path"
