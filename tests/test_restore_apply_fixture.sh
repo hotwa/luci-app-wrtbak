@@ -15,8 +15,11 @@ cache_service_archive="/tmp/wrtbak/restore-cache/service-sample.wrtbak"
 cache_mismatch_archive="/tmp/wrtbak/restore-cache/mismatch.wrtbak"
 cache_failure_archive="/tmp/wrtbak/restore-cache/write-failure.wrtbak"
 cache_unlisted_archive="/tmp/wrtbak/restore-cache/unlisted.wrtbak"
+cache_nested_files_archive="/tmp/wrtbak/restore-cache/nested-files.wrtbak"
+cache_implicit_dir_archive="/tmp/wrtbak/restore-cache/implicit-dir.wrtbak"
 cache_prefix_archive="/tmp/wrtbak/restore-cache/file-prefix.wrtbak"
 cache_compact_archive="/tmp/wrtbak/restore-cache/compact.wrtbak"
+cache_bad_service_archive="/tmp/wrtbak/restore-cache/bad-service.wrtbak"
 cache_unsafe_sysupgrade="/tmp/wrtbak/restore-cache/unsafe.sysupgrade.tar.gz"
 libdir="$repo_dir/root/usr/lib/wrtbak"
 cli="$repo_dir/root/usr/bin/wrtbak"
@@ -231,7 +234,7 @@ PATH="$bin_dir:$PATH" \
 cp "$source_archive" "$fixture_root$cache_archive"
 cp "$source_sysupgrade" "$fixture_root$cache_sysupgrade"
 
-python3 - "$source_archive" "$fixture_root$cache_service_archive" "$fixture_root$cache_mismatch_archive" "$fixture_root$cache_failure_archive" "$fixture_root$cache_unlisted_archive" "$fixture_root$cache_prefix_archive" "$fixture_root$cache_compact_archive" "$fixture_root$cache_unsafe_sysupgrade" <<'PY'
+python3 - "$source_archive" "$fixture_root$cache_service_archive" "$fixture_root$cache_mismatch_archive" "$fixture_root$cache_failure_archive" "$fixture_root$cache_unlisted_archive" "$fixture_root$cache_nested_files_archive" "$fixture_root$cache_implicit_dir_archive" "$fixture_root$cache_prefix_archive" "$fixture_root$cache_compact_archive" "$fixture_root$cache_bad_service_archive" "$fixture_root$cache_unsafe_sysupgrade" <<'PY'
 import hashlib
 import io
 import json
@@ -240,7 +243,7 @@ import tarfile
 import time
 import sys
 
-source, service_archive, mismatch_archive, failure_archive, unlisted_archive, prefix_archive, compact_archive, unsafe_sysupgrade = sys.argv[1:]
+source, service_archive, mismatch_archive, failure_archive, unlisted_archive, nested_files_archive, implicit_dir_archive, prefix_archive, compact_archive, bad_service_archive, unsafe_sysupgrade = sys.argv[1:]
 
 def read_archive(path):
     entries = []
@@ -294,6 +297,25 @@ extra_payload = b"not listed in manifest\n"
 extra_info.size = len(extra_payload)
 unlisted_entries.append((extra_info, extra_payload))
 write_archive(unlisted_archive, unlisted_entries)
+
+nested_entries = []
+for member, data in entries:
+    if member.name == "manifest.json":
+        manifest = json.loads(data.decode())
+        manifest.setdefault("device", {})["files"] = [
+            {
+                "path": "/etc/config/extra",
+                "archive_path": "rootfs/etc/config/extra",
+                "type": "file",
+                "mode": "0644",
+                "size": len(extra_payload),
+                "sha256": hashlib.sha256(extra_payload).hexdigest(),
+            }
+        ]
+        data = json.dumps(manifest, indent=2).encode()
+    nested_entries.append((member, data))
+nested_entries.append((extra_info, extra_payload))
+write_archive(nested_files_archive, nested_entries)
 
 compact_entries = []
 for member, data in entries:
@@ -359,6 +381,29 @@ with tarfile.open(failure_archive, "w:gz") as archive:
     add_dir(archive, "rootfs/zzblocked")
     add_file(archive, "rootfs/zzblocked/child", blocked_payload)
 
+implicit_payload = b"implicit directory child\n"
+implicit_manifest = dict(manifest)
+implicit_manifest["profile"] = "implicit-dir"
+implicit_manifest["backup_id"] = "implicit-dir-1"
+implicit_manifest["files"] = [
+    {
+        "path": "/etc/config/unlisted_dir/child",
+        "archive_path": "rootfs/etc/config/unlisted_dir/child",
+        "type": "file",
+        "mode": "0644",
+        "size": len(implicit_payload),
+        "sha256": hashlib.sha256(implicit_payload).hexdigest(),
+    }
+]
+with tarfile.open(implicit_dir_archive, "w:gz") as archive:
+    add_file(archive, "manifest.json", json.dumps(implicit_manifest, indent=2).encode())
+    add_file(archive, "README.txt", b"implicit directory fixture\n")
+    add_dir(archive, "rootfs")
+    add_dir(archive, "rootfs/etc")
+    add_dir(archive, "rootfs/etc/config")
+    add_dir(archive, "rootfs/etc/config/unlisted_dir", mode=0o777)
+    add_file(archive, "rootfs/etc/config/unlisted_dir/child", implicit_payload)
+
 prefix_payload = b"should not restore via core-system\n"
 prefix_files = [
     ("directory", "/etc", "rootfs/etc", "0755", None),
@@ -385,6 +430,29 @@ with tarfile.open(prefix_archive, "w:gz") as archive:
     add_dir(archive, "rootfs/etc/config")
     add_dir(archive, "rootfs/etc/config/system")
     add_file(archive, "rootfs/etc/config/system/child", prefix_payload)
+
+bad_service_payload = b"#!/bin/sh\nprintf 'executed:%s\\n' \"$1\" > \"${WRTBAK_ROOT%/}/tmp/wrtbak/bad-service.marker\"\n"
+bad_service_manifest = dict(manifest)
+bad_service_manifest["profile"] = "bad-service"
+bad_service_manifest["backup_id"] = "bad-service-1"
+bad_service_manifest["restore"] = dict(manifest["restore"])
+bad_service_manifest["restore"]["restart_services"] = ["../../tmp/pwnsvc"]
+bad_service_manifest["files"] = [
+    {
+        "path": "/tmp/pwnsvc",
+        "archive_path": "rootfs/tmp/pwnsvc",
+        "type": "file",
+        "mode": "0755",
+        "size": len(bad_service_payload),
+        "sha256": hashlib.sha256(bad_service_payload).hexdigest(),
+    }
+]
+with tarfile.open(bad_service_archive, "w:gz") as archive:
+    add_file(archive, "manifest.json", json.dumps(bad_service_manifest, indent=2).encode())
+    add_file(archive, "README.txt", b"bad service fixture\n")
+    add_dir(archive, "rootfs")
+    add_dir(archive, "rootfs/tmp")
+    add_file(archive, "rootfs/tmp/pwnsvc", bad_service_payload, mode=0o755)
 
 with tarfile.open(unsafe_sysupgrade, "w:gz") as archive:
     add_file(archive, "../evil", b"unsafe\n")
@@ -677,7 +745,40 @@ if [ -e "$fixture_root/etc/config/extra" ]; then
 	echo "restore-apply wrote a file that was not listed in manifest" >&2
 	exit 1
 fi
+assert_reject_code archive_mismatch restore-apply --input "$cache_nested_files_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --json
+if [ -e "$fixture_root/etc/config/extra" ]; then
+	echo "restore-apply treated a nested files array as the manifest allowlist" >&2
+	exit 1
+fi
+assert_reject_code invalid_archive restore-apply --input "$cache_bad_service_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 1 --json
+if [ -e "$fixture_root/tmp/wrtbak/bad-service.marker" ] || [ -e "$fixture_root/tmp/pwnsvc" ]; then
+	echo "restore-apply accepted or executed an unsafe restart service" >&2
+	exit 1
+fi
 assert_reject_code invalid_archive restore-sysupgrade --input "$cache_unsafe_sysupgrade" --prebackup "$prebackup" --confirm RESTORE --execute 0 --json
+
+run_cli restore-apply --input "$cache_implicit_dir_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json >"$work_dir/apply-implicit-dir.json"
+python3 - "$work_dir/apply-implicit-dir.json" "$fixture_root" <<'PY'
+import json
+import os
+import stat
+import sys
+
+path, fixture_root = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+target_dir = os.path.join(fixture_root, "etc/config/unlisted_dir")
+target_file = os.path.join(target_dir, "child")
+
+assert data["ok"] is True
+assert data["operation"] == "restore-apply"
+assert data["written_count"] == 1, data
+assert os.path.isfile(target_file)
+with open(target_file, encoding="utf-8") as handle:
+    assert handle.read() == "implicit directory child\n"
+assert stat.S_IMODE(os.stat(target_dir).st_mode) != 0o777
+PY
 
 run_cli restore-apply --input "$cache_prefix_archive" --mode selected --items core-system --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json >"$work_dir/apply-prefix.json"
 python3 - "$work_dir/apply-prefix.json" <<'PY'

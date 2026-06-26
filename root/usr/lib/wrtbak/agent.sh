@@ -542,6 +542,17 @@ wrtbak_agent_jsonfilter_to_file() {
 	fi
 }
 
+wrtbak_agent_service_name_is_safe() {
+	wrtbak_agent_service_name=$1
+
+	case "$wrtbak_agent_service_name" in
+		""|*/*|*' '*|*'	'*|*..*|*[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-]*)
+			return 1
+			;;
+	esac
+	return 0
+}
+
 wrtbak_agent_validate_manifest() {
 	wrtbak_agent_manifest=$1
 
@@ -569,6 +580,10 @@ wrtbak_agent_restore_services() {
 	if [ ! -s "$wrtbak_agent_output" ]; then
 		wrtbak_die "manifest.json missing restore.restart_services"
 	fi
+	while IFS= read -r wrtbak_agent_service || [ -n "$wrtbak_agent_service" ]; do
+		[ -n "$wrtbak_agent_service" ] || continue
+		wrtbak_agent_service_name_is_safe "$wrtbak_agent_service" || wrtbak_die "manifest.json restore.restart_services contains invalid service: $wrtbak_agent_service"
+	done < "$wrtbak_agent_output"
 }
 
 wrtbak_agent_string_file_array_json() {

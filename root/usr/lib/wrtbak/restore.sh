@@ -756,16 +756,79 @@ wrtbak_restore_manifest_files_table() {
 	wrtbak_objects="$wrtbak_tmp_dir/manifest-files.objects"
 
 	awk '
+		function skip_ws(pos,    c) {
+			while (pos <= length(json)) {
+				c = substr(json, pos, 1)
+				if (c != " " && c != "\t" && c != "\n" && c != "\r") {
+					break
+				}
+				pos++
+			}
+			return pos
+		}
+		function read_string(pos,    c, out, escaped) {
+			out = ""
+			escaped = 0
+			for (pos = pos + 1; pos <= length(json); pos++) {
+				c = substr(json, pos, 1)
+				if (escaped) {
+					out = out c
+					escaped = 0
+					continue
+				}
+				if (c == "\\") {
+					escaped = 1
+					continue
+				}
+				if (c == "\"") {
+					json_string_value = out
+					return pos
+				}
+				out = out c
+			}
+			return 0
+		}
+		function top_level_files_start(    pos, c, end, key, after_key, after_colon, object_depth, array_depth) {
+			object_depth = 0
+			array_depth = 0
+			for (pos = 1; pos <= length(json); pos++) {
+				c = substr(json, pos, 1)
+				if (c == "\"") {
+					end = read_string(pos)
+					if (end == 0) {
+						return 0
+					}
+					key = json_string_value
+					after_key = skip_ws(end + 1)
+					if (object_depth == 1 && array_depth == 0 && substr(json, after_key, 1) == ":") {
+						after_colon = skip_ws(after_key + 1)
+						if (key == "files") {
+							if (substr(json, after_colon, 1) == "[") {
+								return after_colon
+							}
+							return 0
+						}
+					}
+					pos = end
+					continue
+				}
+				if (c == "{") {
+					object_depth++
+				} else if (c == "}") {
+					object_depth--
+				} else if (c == "[") {
+					array_depth++
+				} else if (c == "]") {
+					array_depth--
+				}
+			}
+			return 0
+		}
 		{
 			json = json $0 "\n"
 		}
 		END {
-			files_pos = index(json, "\"files\"")
-			if (files_pos == 0) {
-				exit 1
-			}
-			json = substr(json, files_pos)
-			start = index(json, "[")
+			start = top_level_files_start()
 			if (start == 0) {
 				exit 1
 			}
@@ -948,6 +1011,30 @@ wrtbak_restore_verify_archive_manifest_allowlist() {
 				return 1
 				;;
 		esac
+	done < "$wrtbak_archive_table"
+}
+
+wrtbak_restore_filter_archive_table_by_manifest() {
+	wrtbak_archive_table=$1
+	wrtbak_manifest_table=$2
+	wrtbak_filtered_table=$3
+	wrtbak_tab=$(printf '\t')
+
+	: > "$wrtbak_filtered_table"
+	while IFS="$wrtbak_tab" read -r wrtbak_target wrtbak_type wrtbak_mode wrtbak_size wrtbak_sha wrtbak_archive_path || [ -n "$wrtbak_target" ]; do
+		[ -n "$wrtbak_target" ] || continue
+		case "$wrtbak_type" in
+			file)
+				wrtbak_restore_manifest_has_archive_path "$wrtbak_manifest_table" "$wrtbak_archive_path" || continue
+				;;
+			dir)
+				wrtbak_restore_manifest_has_archive_path "$wrtbak_manifest_table" "$wrtbak_archive_path" || continue
+				;;
+			*)
+				continue
+				;;
+		esac
+		printf '%s%s%s%s%s%s%s%s%s%s%s\n' "$wrtbak_target" "$wrtbak_tab" "$wrtbak_type" "$wrtbak_tab" "$wrtbak_mode" "$wrtbak_tab" "$wrtbak_size" "$wrtbak_tab" "$wrtbak_sha" "$wrtbak_tab" "$wrtbak_archive_path" >> "$wrtbak_filtered_table"
 	done < "$wrtbak_archive_table"
 }
 
@@ -1288,6 +1375,7 @@ wrtbak_restore_apply() {
 	wrtbak_extract="$wrtbak_tmp/extract"
 	wrtbak_manifest_table="$wrtbak_tmp/manifest-files.tbl"
 	wrtbak_archive_table="$wrtbak_tmp/archive.tbl"
+	wrtbak_allowed_archive_table="$wrtbak_tmp/archive-allowed.tbl"
 	wrtbak_selected_paths="$wrtbak_tmp/selected.paths"
 	wrtbak_apply_table="$wrtbak_tmp/apply.tbl"
 	wrtbak_skipped="$wrtbak_tmp/skipped.txt"
@@ -1340,12 +1428,13 @@ wrtbak_restore_apply() {
 		wrtbak_restore_invalid_json restore-apply archive_mismatch "restore archive does not match manifest" "$wrtbak_detail"
 		return 1
 	fi
+	wrtbak_restore_filter_archive_table_by_manifest "$wrtbak_archive_table" "$wrtbak_manifest_table" "$wrtbak_allowed_archive_table"
 	if [ "$wrtbak_apply_mode" = "selected" ]; then
 		wrtbak_write_paths_for_items "$wrtbak_items" "$wrtbak_selected_paths"
 	else
 		: > "$wrtbak_selected_paths"
 	fi
-	wrtbak_restore_filter_apply_table "$wrtbak_apply_mode" "$wrtbak_selected_paths" "$wrtbak_archive_table" "$wrtbak_apply_table" "$wrtbak_skipped" "$wrtbak_missing"
+	wrtbak_restore_filter_apply_table "$wrtbak_apply_mode" "$wrtbak_selected_paths" "$wrtbak_allowed_archive_table" "$wrtbak_apply_table" "$wrtbak_skipped" "$wrtbak_missing"
 
 	wrtbak_log_dir=$(wrtbak_restore_log_dir)
 	mkdir -p "$wrtbak_log_dir" || {
