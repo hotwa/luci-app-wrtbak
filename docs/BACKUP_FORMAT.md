@@ -130,3 +130,11 @@ For example, a sysupgrade archive may contain:
 The optional `etc/backup/wrtbak-manifest.json` file can preserve wrtbak metadata for humans or wrtbak-aware tools after export.
 
 Native `sysupgrade -r` restores files from a sysupgrade archive, but it does not validate wrtbak metadata. Any device, firmware, profile, or schema checks must be performed by wrtbak-aware tooling before invoking native restore commands.
+
+## Restore Enforcement
+
+`wrtbak restore-apply` treats the top-level `manifest.files[]` array as the restore allowlist. Files not listed there are rejected before any live write, even if they are present in the tar archive. Regular file entries must match the manifest size and SHA-256 digest.
+
+Restore commands require a fresh local pre-restore `.wrtbak` backup receipt before writing. The receipt binds the prebackup archive path, size, SHA-256 digest, host device ID, creation time, and format. Receipts older than 24 hours or created on another device are rejected.
+
+Confirmed `.wrtbak` restores require the exact confirmation token `RESTORE`. Native `.sysupgrade.tar.gz` restores use `sysupgrade -r` and can interrupt LuCI, SSH, Tailscale, WireGuard, DNS, or routing access. Operators should expect to reconnect and verify the router after sysupgrade or after restoring network-facing configuration.
