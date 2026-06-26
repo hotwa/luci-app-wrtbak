@@ -99,8 +99,10 @@ Rules:
 - The file suffix must be `.wrtbak` or `.sysupgrade.tar.gz`.
 - The command acquires the remote operation lock before downloading.
 - Cache filenames are deterministic: `<sha256(remote_path)-12>-<safe-basename>`.
-- A sidecar file `<local_path>.remote.json` records `target`, `driver`, `remote_path`, `filename`, `format`, `size`, `downloaded_at`, and `sha256`.
-- Existing cache files may be reused only when the sidecar `target`, `remote_path`, `size`, and `sha256` match the remote metadata and local file.
+- A sidecar file `<local_path>.remote.json` records `target`, `driver`, `remote_path`, `filename`, `format`, `size`, `remote_modified`, `remote_etag`, `downloaded_at`, and local `sha256`.
+- Existing cache files may be reused only when the sidecar `target`, `remote_path`, and `size` match the current remote metadata and the local file sha256 still equals the sidecar sha256.
+- If a driver exposes `remote_modified` or `remote_etag`, the matching sidecar value must also match for cache reuse.
+- If a driver exposes neither `remote_modified` nor `remote_etag`, size plus local sha256 is sufficient because v1 cannot require remote content hashes from WebDAV/OpenList or generic S3 listings.
 - Cache collision without a matching sidecar returns `ok:false` with `code:"cache_conflict"`.
 - The command verifies local file size against the remote size.
 - If the remote driver cannot determine size, v1 returns `ok:false` with `code:"size_unavailable"` instead of downloading.
@@ -122,6 +124,8 @@ JSON success shape:
   "filename": "backup.wrtbak",
   "format": "wrtbak",
   "size": 12345,
+  "remote_modified": "Fri, 26 Jun 2026 03:30:00 GMT",
+  "remote_etag": "",
   "sha256": "..."
 }
 ```
@@ -186,8 +190,65 @@ JSON success shape:
   "plan": {
     "file_count": 12,
     "total_bytes": 34567,
-    "paths": [],
+    "paths": [
+      {
+        "path": "/etc/config/system",
+        "archive_path": "rootfs/etc/config/system",
+        "type": "file",
+        "size": 456,
+        "sha256": "...",
+        "items": ["core-system"],
+        "sensitive": false,
+        "selected": true,
+        "action": "write"
+      }
+    ],
     "restart_services": ["network"],
+    "reboot_recommended": true,
+    "requires_confirmation": true
+  }
+}
+```
+
+Sysupgrade prepare success shape differs because the archive is root-relative:
+
+```json
+{
+  "ok": true,
+  "operation": "restore-prepare",
+  "input": "/tmp/wrtbak/restore-cache/abc-backup.sysupgrade.tar.gz",
+  "format": "sysupgrade",
+  "archive": {
+    "filename": "backup.sysupgrade.tar.gz",
+    "size": 12345,
+    "sha256": "..."
+  },
+  "manifest": {
+    "schema": "wrtbak/v1",
+    "present": true,
+    "path": "etc/backup/wrtbak-manifest.json"
+  },
+  "compatibility": {
+    "blocking": false,
+    "warnings": []
+  },
+  "plan": {
+    "file_count": 12,
+    "total_bytes": 34567,
+    "paths": [
+      {
+        "path": "/etc/config/system",
+        "archive_path": "etc/config/system",
+        "type": "file",
+        "size": 456,
+        "sha256": "",
+        "items": [],
+        "sensitive": true,
+        "selected": true,
+        "action": "sysupgrade-restore"
+      }
+    ],
+    "restart_services": [],
     "reboot_recommended": true,
     "requires_confirmation": true
   }
@@ -256,7 +317,7 @@ Failure returns `ok:false` with `code:"invalid_prebackup"`.
 ### `restore-apply`
 
 ```sh
-wrtbak restore-apply --input LOCAL_ARCHIVE --mode all|selected --items IDS|all --prebackup LOCAL_ARCHIVE --confirm RESTORE --json
+wrtbak restore-apply --input LOCAL_ARCHIVE --mode all|selected --items IDS|all --prebackup LOCAL_ARCHIVE --confirm RESTORE [--restart-services 0|1] --json
 ```
 
 Applies a reviewed `.wrtbak` archive.
@@ -328,7 +389,7 @@ Service handling:
 ### `restore-sysupgrade`
 
 ```sh
-wrtbak restore-sysupgrade --input LOCAL_ARCHIVE --prebackup LOCAL_ARCHIVE --confirm RESTORE --json
+wrtbak restore-sysupgrade --input LOCAL_ARCHIVE --prebackup LOCAL_ARCHIVE --confirm RESTORE [--execute 0|1] --json
 ```
 
 Applies a downloaded `.sysupgrade.tar.gz` archive through OpenWrt native restore.
@@ -447,9 +508,11 @@ Write exec permissions:
 - `/usr/bin/wrtbak restore-apply *`
 - `/usr/bin/wrtbak restore-sysupgrade *`
 
-Existing backup and remote permissions remain unchanged.
-No broad filesystem read/write ACL is granted for `/tmp/wrtbak/restore-cache/*`.
+The existing broad read/stat ACL for `/tmp/wrtbak/*` must be narrowed.
+LuCI download still needs read/stat for generated local archives, but restore cache sidecars should not be directly browsable.
+Replace `/tmp/wrtbak/*` with explicit patterns for generated downloadable archives and avoid granting direct file ACLs for `/tmp/wrtbak/restore-cache/*`.
 LuCI interacts with cache files only through `wrtbak` commands.
+`tests/test_luci_layout.sh` must assert that the broad `/tmp/wrtbak/*` ACL is absent.
 
 ## Testing Strategy
 
@@ -462,9 +525,13 @@ Local fixture tests:
 - `remote-download` rejects paths outside the current device prefix
 - `remote-download` rejects cache collision without matching sidecar
 - `remote-download` rejects unavailable remote size
+- `remote-download` cache reuse accepts size plus local sha256 when remote hash is unavailable
+- `remote-download` cache reuse checks `remote_modified` or `remote_etag` when a driver provides them
 - every new command returns the standard JSON error envelope
 - `restore-prepare` returns plan JSON for a valid `.wrtbak`
+- `restore-prepare` emits concrete `plan.paths[]` entries
 - `restore-prepare` returns sysupgrade metadata and warnings for a valid `.sysupgrade.tar.gz`
+- `restore-apply` parses and honors `--restart-services 0|1`
 - `restore-apply` rejects missing confirmation
 - `restore-apply` rejects missing prebackup
 - `restore-apply` rejects stale, unrelated, or sha-mismatched prebackup receipts
@@ -475,8 +542,10 @@ Local fixture tests:
 - `restore-apply --mode all` writes all archive paths
 - `restore-apply` reports mid-apply failure with log path and written count
 - `restore-sysupgrade` rejects non-sysupgrade input
+- `restore-sysupgrade` parses and honors `--execute 0|1`
 - `restore-sysupgrade` rejects unsafe sysupgrade tar members
 - high-risk service restart is blocked unless explicitly requested
+- LuCI ACL tests verify `/tmp/wrtbak/*` broad read/stat access was removed
 - LuCI layout contains restore buttons, review panel, confirmation input, and apply buttons
 - LuCI tests verify prepare, prebackup, and apply command argument mapping
 
