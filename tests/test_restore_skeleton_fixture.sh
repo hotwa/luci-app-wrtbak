@@ -16,6 +16,10 @@ mkdir -p "$fixture_root/etc/config"
 cat >"$fixture_root/etc/config/wrtbak" <<'EOT'
 config wrtbak 'main'
 EOT
+mkdir -p "$fixture_root/tmp/wrtbak/restore-cache" "$fixture_root/tmp/wrtbak"
+printf 'placeholder\n' >"$fixture_root/tmp/wrtbak/restore-cache/sample.wrtbak"
+printf 'placeholder\n' >"$fixture_root/tmp/wrtbak/restore-cache/sample.sysupgrade.tar.gz"
+printf 'placeholder\n' >"$fixture_root/tmp/wrtbak/pre-restore-sample.wrtbak"
 
 run_cli() {
 	WRTBAK_ROOT="$fixture_root" \
@@ -54,13 +58,53 @@ assert_skeleton_command() {
 	assert_skeleton_json "$output_file" "$operation"
 }
 
-assert_skeleton_command restore-prepare \
-	restore-prepare --input /tmp/wrtbak/restore-cache/missing.wrtbak --json
-assert_skeleton_command restore-prebackup \
-	restore-prebackup --profile pre-restore --items all --format wrtbak --json
+assert_error_code() {
+	output_file=$1
+	operation=$2
+	code=$3
+	python3 - "$output_file" "$operation" "$code" <<'PY'
+import json
+import sys
+
+path, operation, code = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+assert data["ok"] is False
+assert data["operation"] == operation
+assert data["code"] == code
+PY
+}
+
+prepare_output="$work_dir/restore-prepare-invalid.json"
+if run_cli restore-prepare --input /tmp/wrtbak/restore-cache/missing.wrtbak --json >"$prepare_output"; then
+	echo "expected restore-prepare invalid path command to fail" >&2
+	cat "$prepare_output" >&2
+	exit 1
+fi
+assert_error_code "$prepare_output" restore-prepare invalid_input_path
+
+prebackup_output="$work_dir/restore-prebackup.json"
+run_cli restore-prebackup --profile pre-restore --items all --format wrtbak --json >"$prebackup_output"
+python3 - "$prebackup_output" "$fixture_root" <<'PY'
+import json
+import os
+import sys
+
+path, fixture_root = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+assert data["ok"] is True
+assert data["operation"] == "restore-prebackup"
+assert data["path"].startswith("/tmp/wrtbak/pre-restore-")
+assert os.path.isfile(fixture_root + data["path"])
+assert os.path.isfile(fixture_root + data["receipt_path"])
+PY
+
 assert_skeleton_command restore-apply \
-	restore-apply --input /tmp/wrtbak/restore-cache/missing.wrtbak --mode all --items all --prebackup /tmp/wrtbak/pre-restore-missing.wrtbak --confirm RESTORE --restart-services 0 --json
+	restore-apply --input /tmp/wrtbak/restore-cache/sample.wrtbak --mode all --items all --prebackup /tmp/wrtbak/pre-restore-sample.wrtbak --confirm RESTORE --restart-services 0 --json
 assert_skeleton_command restore-sysupgrade \
-	restore-sysupgrade --input /tmp/wrtbak/restore-cache/missing.sysupgrade.tar.gz --prebackup /tmp/wrtbak/pre-restore-missing.wrtbak --confirm RESTORE --execute 0 --json
+	restore-sysupgrade --input /tmp/wrtbak/restore-cache/sample.sysupgrade.tar.gz --prebackup /tmp/wrtbak/pre-restore-sample.wrtbak --confirm RESTORE --execute 0 --json
 
 echo "fixture restore skeleton command test passed"
