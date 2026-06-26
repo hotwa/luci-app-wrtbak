@@ -23,6 +23,11 @@ fi
 . "$WRTBAK_LIBDIR/pack.sh"
 . "$WRTBAK_LIBDIR/web.sh"
 . "$WRTBAK_LIBDIR/agent.sh"
+. "$WRTBAK_LIBDIR/config.sh"
+. "$WRTBAK_LIBDIR/remote.sh"
+. "$WRTBAK_LIBDIR/remote_webdav.sh"
+. "$WRTBAK_LIBDIR/remote_s3.sh"
+. "$WRTBAK_LIBDIR/schedule.sh"
 
 wrtbak_usage() {
 	cat <<'EOF'
@@ -30,6 +35,14 @@ Usage:
   wrtbak info
   wrtbak status --json
   wrtbak doctor --json
+  wrtbak remote-status --json
+  wrtbak remote-test --target webdav|s3 --json
+  wrtbak remote-list --target default|webdav|s3 --json
+  wrtbak remote-upload --target default|webdav|s3 --profile NAME --items IDS|all --format wrtbak|sysupgrade [--prune-max N] --json
+  wrtbak remote-delete --target default|webdav|s3 --path REMOTE_PATH --json
+  wrtbak remote-prune --target default|webdav|s3 --max N --json
+  wrtbak schedule-status --json
+  wrtbak schedule-apply --json
   wrtbak detect [--json]
   wrtbak plan --profile NAME --items IDS --format wrtbak|sysupgrade --json
   wrtbak restore-plan --input FILE --json
@@ -127,6 +140,210 @@ wrtbak_parse_agent_json_only() {
 			;;
 		doctor)
 			wrtbak_agent_doctor_json
+			;;
+	esac
+}
+
+wrtbak_parse_remote_status() {
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown remote-status argument: $1"
+				;;
+		esac
+	done
+
+	wrtbak_remote_status_json
+}
+
+wrtbak_parse_remote_target_json_only() {
+	wrtbak_remote_command=$1
+	shift
+	wrtbak_target=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown $wrtbak_remote_command argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_target" ] || wrtbak_die "--target is required"
+
+	case "$wrtbak_remote_command" in
+		remote-test)
+			wrtbak_remote_test "$wrtbak_target"
+			;;
+		remote-list)
+			wrtbak_remote_list "$wrtbak_target"
+			;;
+	esac
+}
+
+wrtbak_parse_remote_upload() {
+	wrtbak_target=
+	wrtbak_profile=
+	wrtbak_items=
+	wrtbak_format=wrtbak
+	wrtbak_prune_max=0
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--profile)
+				[ "$#" -ge 2 ] || wrtbak_die "--profile requires a value"
+				wrtbak_profile=$2
+				shift 2
+				;;
+			--items)
+				[ "$#" -ge 2 ] || wrtbak_die "--items requires a value"
+				wrtbak_items=$2
+				shift 2
+				;;
+			--format)
+				[ "$#" -ge 2 ] || wrtbak_die "--format requires a value"
+				wrtbak_format=$2
+				shift 2
+				;;
+			--prune-max)
+				[ "$#" -ge 2 ] || wrtbak_die "--prune-max requires a value"
+				wrtbak_prune_max=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown remote-upload argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_target" ] || wrtbak_die "--target is required"
+	[ -n "$wrtbak_profile" ] || wrtbak_die "--profile is required"
+	[ -n "$wrtbak_items" ] || wrtbak_die "--items is required"
+	wrtbak_remote_upload "$wrtbak_target" "$wrtbak_profile" "$wrtbak_items" "$wrtbak_format" "$wrtbak_prune_max"
+}
+
+wrtbak_parse_remote_delete() {
+	wrtbak_target=
+	wrtbak_path=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--path)
+				[ "$#" -ge 2 ] || wrtbak_die "--path requires a value"
+				wrtbak_path=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown remote-delete argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_target" ] || wrtbak_die "--target is required"
+	[ -n "$wrtbak_path" ] || wrtbak_die "--path is required"
+	wrtbak_remote_delete "$wrtbak_target" "$wrtbak_path"
+}
+
+wrtbak_parse_remote_prune() {
+	wrtbak_target=
+	wrtbak_max=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--max)
+				[ "$#" -ge 2 ] || wrtbak_die "--max requires a value"
+				wrtbak_max=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown remote-prune argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_target" ] || wrtbak_die "--target is required"
+	[ -n "$wrtbak_max" ] || wrtbak_die "--max is required"
+	wrtbak_remote_prune "$wrtbak_target" "$wrtbak_max"
+}
+
+wrtbak_parse_schedule_json_only() {
+	wrtbak_schedule_command=$1
+	shift
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown $wrtbak_schedule_command argument: $1"
+				;;
+		esac
+	done
+	case "$wrtbak_schedule_command" in
+		schedule-status)
+			wrtbak_schedule_status_json
+			;;
+		schedule-apply)
+			wrtbak_schedule_apply
 			;;
 	esac
 }
@@ -274,6 +491,24 @@ case "$wrtbak_command" in
 		;;
 	status|doctor)
 		wrtbak_parse_agent_json_only "$wrtbak_command" "$@"
+		;;
+	remote-status)
+		wrtbak_parse_remote_status "$@"
+		;;
+	remote-test|remote-list)
+		wrtbak_parse_remote_target_json_only "$wrtbak_command" "$@"
+		;;
+	remote-upload)
+		wrtbak_parse_remote_upload "$@"
+		;;
+	remote-delete)
+		wrtbak_parse_remote_delete "$@"
+		;;
+	remote-prune)
+		wrtbak_parse_remote_prune "$@"
+		;;
+	schedule-status|schedule-apply)
+		wrtbak_parse_schedule_json_only "$wrtbak_command" "$@"
 		;;
 	detect|list-items)
 		wrtbak_parse_detect "$@"
