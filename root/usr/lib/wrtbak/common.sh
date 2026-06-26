@@ -257,7 +257,12 @@ wrtbak_size_of() {
 }
 
 wrtbak_sha256_of() {
-	sha256sum "$1" | awk '{ print $1 }'
+	wrtbak_sha256=$(sha256sum "$1" 2>/dev/null | awk 'NR == 1 { print $1 }')
+	printf '%s\n' "$wrtbak_sha256" | awk '
+		length($0) == 64 && $0 !~ /[^0-9A-Fa-f]/ { ok = 1 }
+		END { exit ok ? 0 : 1 }
+	' || return 1
+	printf '%s\n' "$wrtbak_sha256"
 }
 
 wrtbak_is_safe_member() {

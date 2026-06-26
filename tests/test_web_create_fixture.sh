@@ -48,10 +48,13 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     data = json.load(handle)
 
 output_dir = sys.argv[2]
+expected_dir = os.path.join(output_dir, "downloads")
 assert data["format"] == "wrtbak"
 assert data["filename"].startswith("web-test-")
 assert data["filename"].endswith(".wrtbak")
-assert data["path"] == os.path.join(output_dir, data["filename"])
+assert data["path"].startswith(expected_dir + os.sep)
+assert data["path"] == os.path.join(expected_dir, data["filename"])
+assert data["path"].endswith(".wrtbak") or data["path"].endswith(".sysupgrade.tar.gz")
 assert data["size"] > 0
 assert os.path.isfile(data["path"])
 PY
@@ -73,9 +76,12 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     data = json.load(handle)
 
 output_dir = sys.argv[2]
+expected_dir = os.path.join(output_dir, "downloads")
 assert data["format"] == "sysupgrade"
 assert data["filename"].endswith(".sysupgrade.tar.gz")
-assert data["path"] == os.path.join(output_dir, data["filename"])
+assert data["path"].startswith(expected_dir + os.sep)
+assert data["path"] == os.path.join(expected_dir, data["filename"])
+assert data["path"].endswith(".wrtbak") or data["path"].endswith(".sysupgrade.tar.gz")
 assert data["size"] > 0
 assert os.path.isfile(data["path"])
 PY

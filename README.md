@@ -21,6 +21,8 @@ Current capabilities:
 - Configure WebDAV and S3-compatible remote backup targets from LuCI or UCI.
 - Upload, list, prune, and delete remote backups through stable JSON CLI commands.
 - Apply cron-based automatic backups using the selected remote target.
+- Download remote backups into a local restore cache, review restore plans, create mandatory pre-restore backups, and apply confirmed `.wrtbak` restores.
+- Preflight or execute native `.sysupgrade.tar.gz` restores through OpenWrt `sysupgrade -r` after confirmation.
 
 ## Security Warning
 

@@ -6,7 +6,11 @@
 				"download"
 			],
 			"file": {
-				"/tmp/wrtbak/*": [
+				"/tmp/wrtbak/downloads/*.wrtbak": [
+					"read",
+					"stat"
+				],
+				"/tmp/wrtbak/downloads/*.sysupgrade.tar.gz": [
 					"read",
 					"stat"
 				],
@@ -23,6 +27,12 @@
 					"exec"
 				],
 				"/usr/bin/wrtbak remote-list *": [
+					"exec"
+				],
+				"/usr/bin/wrtbak remote-download *": [
+					"exec"
+				],
+				"/usr/bin/wrtbak restore-prepare *": [
 					"exec"
 				]
 			},
@@ -59,6 +69,15 @@
 					"exec"
 				],
 				"/usr/bin/wrtbak remote-prune *": [
+					"exec"
+				],
+				"/usr/bin/wrtbak restore-prebackup *": [
+					"exec"
+				],
+				"/usr/bin/wrtbak restore-apply *": [
+					"exec"
+				],
+				"/usr/bin/wrtbak restore-sysupgrade *": [
 					"exec"
 				],
 				"/usr/bin/wrtbak schedule-apply --json": [

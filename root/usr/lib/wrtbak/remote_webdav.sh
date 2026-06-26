@@ -190,6 +190,92 @@ wrtbak_webdav_list_raw() {
 }
 
 
+wrtbak_webdav_stat_file() {
+	wrtbak_url=$1
+	wrtbak_username=$2
+	wrtbak_password=$3
+	wrtbak_remote_path=$4
+	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-webdav-stat.XXXXXX") || return 1
+	wrtbak_netrc=$(wrtbak_webdav_make_netrc "$wrtbak_tmp" "$wrtbak_url" "$wrtbak_username" "$wrtbak_password") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_file_url=$(wrtbak_webdav_url_for_path "$wrtbak_url" "$wrtbak_remote_path") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_xml="$wrtbak_tmp/propfind.xml"
+
+	if ! wrtbak_webdav_curl "$wrtbak_netrc" -X PROPFIND -H "Depth: 0" "$wrtbak_file_url" > "$wrtbak_xml" 2>/dev/null; then
+		rm -rf "$wrtbak_tmp"
+		return 1
+	fi
+
+	wrtbak_line=$(tr '\n' ' ' < "$wrtbak_xml")
+	wrtbak_size=$(printf '%s\n' "$wrtbak_line" | sed -n 's/.*<[^>]*getcontentlength>\([^<]*\)<\/[^>]*getcontentlength>.*/\1/p')
+	wrtbak_modified=$(printf '%s\n' "$wrtbak_line" | sed -n 's/.*<[^>]*getlastmodified>\([^<]*\)<\/[^>]*getlastmodified>.*/\1/p')
+	wrtbak_etag=$(printf '%s\n' "$wrtbak_line" | sed -n 's/.*<[^>]*getetag>\([^<]*\)<\/[^>]*getetag>.*/\1/p')
+	printf '%s\t%s\t%s\n' "$wrtbak_size" "$wrtbak_modified" "$wrtbak_etag"
+	rm -rf "$wrtbak_tmp"
+}
+
+wrtbak_webdav_download_file() {
+	wrtbak_url=$1
+	wrtbak_username=$2
+	wrtbak_password=$3
+	wrtbak_remote_path=$4
+	wrtbak_local_path=$5
+	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-webdav-download.XXXXXX") || return 1
+	wrtbak_netrc=$(wrtbak_webdav_make_netrc "$wrtbak_tmp" "$wrtbak_url" "$wrtbak_username" "$wrtbak_password") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_file_url=$(wrtbak_webdav_url_for_path "$wrtbak_url" "$wrtbak_remote_path") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_headers="$wrtbak_tmp/headers"
+	wrtbak_body="$wrtbak_tmp/body"
+
+	if ! wrtbak_webdav_curl "$wrtbak_netrc" -D "$wrtbak_headers" -o "$wrtbak_body" "$wrtbak_file_url" >/dev/null; then
+		rm -rf "$wrtbak_tmp"
+		return 1
+	fi
+	wrtbak_status=$(awk '/^HTTP\// { code = $2 } END { print code }' "$wrtbak_headers" 2>/dev/null || true)
+	case "$wrtbak_status" in
+		2??|"")
+			if ! mv -f "$wrtbak_body" "$wrtbak_local_path"; then
+				rm -rf "$wrtbak_tmp"
+				return 1
+			fi
+			rm -rf "$wrtbak_tmp"
+			return 0
+			;;
+		3??)
+			wrtbak_redirect=$(sed -n 's/.*href="\([^"]*\)".*/\1/p' "$wrtbak_body" | sed -n '1p' | sed 's/&amp;/\&/g')
+			if [ -z "$wrtbak_redirect" ]; then
+				wrtbak_redirect=$(awk 'tolower($1) == "location:" { sub(/^[^ ]+[ ]*/, ""); sub(/\r$/, ""); print; exit }' "$wrtbak_headers")
+			fi
+			case "$wrtbak_redirect" in
+				http://*|https://*)
+					if ! curl -fsS -L -o "$wrtbak_body.redirect" "$wrtbak_redirect" >/dev/null; then
+						rm -rf "$wrtbak_tmp"
+						return 1
+					fi
+					if ! mv -f "$wrtbak_body.redirect" "$wrtbak_local_path"; then
+						rm -rf "$wrtbak_tmp"
+						return 1
+					fi
+					rm -rf "$wrtbak_tmp"
+					return 0
+					;;
+			esac
+			;;
+	esac
+	rm -rf "$wrtbak_tmp"
+	return 1
+}
+
 wrtbak_webdav_upload_file() {
 	wrtbak_url=$1
 	wrtbak_username=$2
