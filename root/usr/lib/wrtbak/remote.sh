@@ -718,6 +718,7 @@ wrtbak_remote_prune_unlocked() {
 	wrtbak_target=$1
 	wrtbak_max=$2
 	wrtbak_result_file=$3
+	wrtbak_protected_path=${4:-}
 	case "$wrtbak_max" in
 		''|*[!0-9]*) return 1 ;;
 	esac
@@ -735,14 +736,23 @@ wrtbak_remote_prune_unlocked() {
 		rm -f "$wrtbak_list" "$wrtbak_delete_list"
 		return 1
 	}
-	wrtbak_kept=0
 	wrtbak_tab=$(printf '\t')
+	wrtbak_protected_format=
+	if [ -n "$wrtbak_protected_path" ]; then
+		wrtbak_protected_format=$(awk -F "$wrtbak_tab" -v path="$wrtbak_protected_path" '$1 == path { print $3; exit }' "$wrtbak_list")
+	fi
 	for wrtbak_prune_format in wrtbak sysupgrade; do
 		wrtbak_rank=0
+		wrtbak_effective_max=$wrtbak_max
+		if [ "$wrtbak_prune_format" = "$wrtbak_protected_format" ]; then
+			wrtbak_effective_max=$((wrtbak_max - 1))
+			[ "$wrtbak_effective_max" -ge 0 ] || wrtbak_effective_max=0
+		fi
 		awk -F "$wrtbak_tab" -v fmt="$wrtbak_prune_format" '$3 == fmt { print }' "$wrtbak_list" | sort -t "$wrtbak_tab" -k5,5r -k1,1r | while IFS="$wrtbak_tab" read -r wrtbak_path wrtbak_filename wrtbak_item_format wrtbak_size wrtbak_modified || [ -n "$wrtbak_path" ]; do
 			[ -n "$wrtbak_path" ] || continue
+			[ "$wrtbak_path" != "$wrtbak_protected_path" ] || continue
 			wrtbak_rank=$((wrtbak_rank + 1))
-			if [ "$wrtbak_rank" -gt "$wrtbak_max" ]; then
+			if [ "$wrtbak_rank" -gt "$wrtbak_effective_max" ]; then
 				printf '%s\n' "$wrtbak_path" >> "$wrtbak_delete_list"
 			fi
 		done
@@ -876,7 +886,7 @@ wrtbak_remote_upload() {
 		''|*[!0-9]*) wrtbak_prune_max=0 ;;
 	esac
 	if [ "$wrtbak_prune_max" -gt 0 ]; then
-		if ! wrtbak_remote_prune_unlocked "$wrtbak_target" "$wrtbak_prune_max" "$wrtbak_prune_result"; then
+		if ! wrtbak_remote_prune_unlocked "$wrtbak_target" "$wrtbak_prune_max" "$wrtbak_prune_result" "$wrtbak_uploaded_remote_path"; then
 			wrtbak_history_append remote-upload "$wrtbak_target" false command_failed "upload succeeded but prune failed" "$wrtbak_uploaded_remote_path"
 			wrtbak_remote_lock_release
 			wrtbak_remote_error_json remote-upload "$wrtbak_target" command_failed "upload succeeded but prune failed" ""
