@@ -88,6 +88,7 @@ printf '%s\n' "$*" >>"$WRTBAK_FAKE_CURL_LOG"
 previous=
 method=GET
 output=
+location=0
 for arg in "$@"; do
 	if [ "$previous" = "--netrc-file" ]; then
 		printf '%s\n' "$arg" >>"$WRTBAK_FAKE_NETRC_LOG"
@@ -102,6 +103,9 @@ for arg in "$@"; do
 	fi
 	if [ "$previous" = "-o" ] || [ "$previous" = "--output" ]; then
 		output=$arg
+	fi
+	if [ "$arg" = "-L" ] || [ "$arg" = "--location" ]; then
+		location=1
 	fi
 	previous=$arg
 done
@@ -130,6 +134,10 @@ if [ -n "$output" ]; then
 	if [ "${WRTBAK_FAKE_DOWNLOAD_FAIL:-0}" = "1" ]; then
 		printf 'partial' > "$output"
 		exit 55
+	fi
+	if [ "${WRTBAK_FAKE_DOWNLOAD_REDIRECT:-0}" = "1" ] && [ "$location" != "1" ]; then
+		printf '<a href="https://storage.example.invalid/sample.wrtbak">Found</a>.' > "$output"
+		exit 0
 	fi
 	printf '%s' "$content" > "$output"
 	printf 'webdav\t%s\n' "$output" >>"$WRTBAK_FAKE_DOWNLOAD_LOG"
@@ -249,6 +257,7 @@ run_cli_with_path() {
 	WRTBAK_FAKE_REMOTE_ETAG="${WRTBAK_FAKE_REMOTE_ETAG:-}" \
 	WRTBAK_FAKE_SIZE_UNAVAILABLE="${WRTBAK_FAKE_SIZE_UNAVAILABLE:-0}" \
 	WRTBAK_FAKE_DOWNLOAD_FAIL="${WRTBAK_FAKE_DOWNLOAD_FAIL:-0}" \
+	WRTBAK_FAKE_DOWNLOAD_REDIRECT="${WRTBAK_FAKE_DOWNLOAD_REDIRECT:-0}" \
 	WRTBAK_FAKE_NO_METADATA="${WRTBAK_FAKE_NO_METADATA:-0}" \
 	PATH="$wrtbak_path_prefix:$PATH" \
 		"$cli" "$@"
@@ -271,6 +280,7 @@ run_cli_with_exact_path() {
 	WRTBAK_FAKE_REMOTE_ETAG="${WRTBAK_FAKE_REMOTE_ETAG:-}" \
 	WRTBAK_FAKE_SIZE_UNAVAILABLE="${WRTBAK_FAKE_SIZE_UNAVAILABLE:-0}" \
 	WRTBAK_FAKE_DOWNLOAD_FAIL="${WRTBAK_FAKE_DOWNLOAD_FAIL:-0}" \
+	WRTBAK_FAKE_DOWNLOAD_REDIRECT="${WRTBAK_FAKE_DOWNLOAD_REDIRECT:-0}" \
 	WRTBAK_FAKE_NO_METADATA="${WRTBAK_FAKE_NO_METADATA:-0}" \
 	PATH="$wrtbak_exact_path" \
 		"$cli" "$@"
@@ -407,6 +417,17 @@ if sys.argv[2]:
     assert data["code"] == sys.argv[2], data
 PY
 }
+
+WRTBAK_FAKE_DOWNLOAD_REDIRECT=1
+WRTBAK_FAKE_REMOTE_MODIFIED="Fri, 26 Jun 2026 03:31:00 GMT"
+WRTBAK_FAKE_REMOTE_ETAG="etag-redirect"
+run_success "$work_dir/webdav-redirect.json" remote-download --target webdav --path "$webdav_sample" --json
+assert_success_json "$work_dir/webdav-redirect.json" webdav curl "$webdav_sample" "Fri, 26 Jun 2026 03:31:00 GMT" "etag-redirect"
+grep -- '-L' "$curl_log" >/dev/null 2>&1 || {
+	echo "WebDAV download did not request curl location following" >&2
+	exit 1
+}
+WRTBAK_FAKE_DOWNLOAD_REDIRECT=0
 
 WRTBAK_FAKE_REMOTE_MODIFIED="Fri, 26 Jun 2026 03:30:00 GMT"
 WRTBAK_FAKE_REMOTE_ETAG="etag-1"

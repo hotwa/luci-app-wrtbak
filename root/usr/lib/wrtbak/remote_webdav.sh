@@ -235,7 +235,7 @@ wrtbak_webdav_download_file() {
 		return 1
 	}
 
-	if ! wrtbak_webdav_curl "$wrtbak_netrc" -o "$wrtbak_local_path" "$wrtbak_file_url" >/dev/null; then
+	if ! wrtbak_webdav_curl "$wrtbak_netrc" -L -o "$wrtbak_local_path" "$wrtbak_file_url" >/dev/null; then
 		rm -rf "$wrtbak_tmp"
 		return 1
 	fi
