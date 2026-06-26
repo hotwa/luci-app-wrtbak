@@ -19,8 +19,8 @@
 - [x] **Phase 3: Remote CLI Gate** - status/test/upload/list/delete/prune/history/lock commands pass local fixture tests.
 - [x] **Phase 4: Schedule Gate** - cron generation, schedule status, item snapshot, and prune-on-upload tests pass.
 - [x] **Phase 5: LuCI Gate** - remote storage UI, secret handling, ACL, button mapping, and layout tests pass.
-- [ ] **Phase 6: Package Gate** - GitHub Actions builds an APK from the branch.
-- [ ] **Phase 7: Router QA Gate** - install on `192.168.11.234`, configure runtime credentials, verify WebDAV/S3 upload/list/prune and automatic backup.
+- [x] **Phase 6: Package Gate** - GitHub Actions builds an APK from the branch.
+- [x] **Phase 7: Router QA Gate** - install on `192.168.11.234`, configure runtime credentials, verify WebDAV/S3 upload/list/prune and automatic backup.
 
 ## File Structure
 
@@ -751,7 +751,7 @@ gh run list --repo hotwa/luci-app-wrtbak --workflow build-package.yml --limit 3
 
 Expected: a new run starts on the implementation branch.
 
-- [ ] **Step 4: Wait for build and download APK**
+- [x] **Step 4: Wait for build and download APK**
 
 Run:
 
@@ -763,7 +763,7 @@ find /tmp/wrtbak-apk -name 'luci-app-wrtbak-*.apk' -print
 
 Expected: build succeeds and an APK path is printed.
 
-- [ ] **Step 5: Install APK on test router**
+- [x] **Step 5: Install APK on test router**
 
 Run:
 
@@ -781,7 +781,7 @@ Expected: install succeeds and `remote-status` returns parseable JSON.
 - Do not commit runtime credentials or test archives.
 - Update docs only with sanitized results if needed.
 
-- [ ] **Step 1: Configure WebDAV credentials at runtime**
+- [x] **Step 1: Configure WebDAV credentials at runtime**
 
 Run on router with credentials supplied outside git:
 
@@ -791,7 +791,7 @@ ssh root@192.168.11.234 "uci set wrtbak.webdav.enabled='1'; uci set wrtbak.webda
 
 Expected: UCI commit succeeds. Do not paste credentials into commits, docs, or logs.
 
-- [ ] **Step 2: Test WebDAV**
+- [x] **Step 2: Test WebDAV**
 
 Run:
 
@@ -803,7 +803,7 @@ ssh root@192.168.11.234 "wrtbak remote-list --target webdav --json"
 
 Expected: all commands return `ok:true`, and list includes the uploaded backup.
 
-- [ ] **Step 3: Configure S3 credentials at runtime**
+- [x] **Step 3: Configure S3 credentials at runtime**
 
 Run on router with credentials supplied outside git:
 
@@ -813,7 +813,7 @@ ssh root@192.168.11.234 "uci set wrtbak.s3.enabled='1'; uci set wrtbak.s3.endpoi
 
 Expected: UCI commit succeeds. Do not paste credentials into commits, docs, or logs.
 
-- [ ] **Step 4: Test S3**
+- [x] **Step 4: Test S3**
 
 Run:
 
@@ -825,7 +825,7 @@ ssh root@192.168.11.234 "wrtbak remote-list --target s3 --json"
 
 Expected: all commands return `ok:true`, and list includes the uploaded backup.
 
-- [ ] **Step 5: Test schedule without waiting for cron**
+- [x] **Step 5: Test schedule without waiting for cron**
 
 Run:
 
@@ -837,7 +837,7 @@ ssh root@192.168.11.234 "/usr/bin/wrtbak remote-upload --target default --profil
 
 Expected: schedule apply returns `ok:true`, cron block exists, manual cron command returns `ok:true`.
 
-- [ ] **Step 6: Verify LuCI page manually**
+- [x] **Step 6: Verify LuCI page manually**
 
 Open:
 
@@ -854,7 +854,7 @@ Expected:
 - Apply schedule displays sanitized result
 - no secret value is displayed after saving
 
-- [ ] **Step 7: Commit docs update if needed**
+- [x] **Step 7: Commit docs update if needed**
 
 If sanitized docs changed:
 
@@ -872,7 +872,7 @@ Expected: commit succeeds without credentials.
 **Files:**
 - All implementation files from prior chunks.
 
-- [ ] **Step 1: Run final local verification**
+- [x] **Step 1: Run final local verification**
 
 Run:
 
@@ -924,3 +924,13 @@ gh run list --repo hotwa/luci-app-wrtbak --workflow build-package.yml --limit 3
 ```
 
 Expected: main branch package build starts and succeeds.
+
+
+## Verification Notes - 2026-06-25
+
+- Package build: GitHub Actions run 28187169743 completed successfully for commit 20bda1a; downloaded luci-app-wrtbak-0.1.0-r17.apk and installed it on the test router.
+- Local verification: shell syntax, every tests/*.sh fixture, git diff --check, and the repository secret-pattern scan all exited 0.
+- WebDAV runtime QA: probe, list, prune, and default-target scheduled upload all returned ok:true; LuCI Manage Backups showed the remote wrtbak records.
+- S3 runtime QA: probe, full upload, recursive list, and prune max 2 returned ok:true; S3 size verification accepts rclone singular/plural byte wording.
+- Schedule QA: schedule apply installed the marked cron block for 03:30; the equivalent manual cron upload succeeded with prune enabled.
+- Browser QA: LuCI rendered backup item pagination, installed LuCI app detection, WebDAV/S3 configuration fields, automatic backup controls, and remote backup management without current-page console errors.
