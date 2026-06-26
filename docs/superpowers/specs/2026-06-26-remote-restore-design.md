@@ -93,6 +93,32 @@ because OpenWrt's native `sysupgrade -r` is the writer.
 
 ## CLI Commands
 
+### Local Archive Path Policy
+
+All restore commands that accept `LOCAL_ARCHIVE` use the same path policy.
+
+Allowed `--input` paths:
+
+- `/tmp/wrtbak/restore-cache/*.wrtbak`
+- `/tmp/wrtbak/restore-cache/*.sysupgrade.tar.gz`
+- `/tmp/wrtbak/downloads/*.wrtbak`
+- `/tmp/wrtbak/downloads/*.sysupgrade.tar.gz`
+
+Allowed `--prebackup` paths:
+
+- `/tmp/wrtbak/pre-restore-*.wrtbak`
+
+Rules:
+
+- paths must be absolute
+- paths must not contain `..`
+- paths must resolve to regular files
+- symlink inputs are rejected
+- `.wrtbak` inputs are accepted only by `restore-prepare` and `restore-apply`
+- `.sysupgrade.tar.gz` inputs are accepted only by `restore-prepare` and `restore-sysupgrade`
+- invalid input paths return `ok:false` with `code:"invalid_input_path"`
+- invalid prebackup paths return `ok:false` with `code:"invalid_prebackup"`
+
 ### `remote-download`
 
 ```sh
@@ -151,9 +177,9 @@ wrtbak restore-prepare --input LOCAL_ARCHIVE --json
 
 Runs all read-only checks needed before an apply:
 
-- validates that the local path is under the restore cache or `/tmp/wrtbak`
+- validates that the local path matches the Local Archive Path Policy
 - determines archive format from the filename and tar structure
-- for `.wrtbak`, validates `manifest.json` and `rootfs/`, then runs the same internal validation logic used by `restore-plan`
+- for `.wrtbak`, validates `manifest.json` and `rootfs/`, then runs the shared archive-plan validation logic
 - for `.sysupgrade.tar.gz`, validates root-relative tar members and reads `etc/backup/wrtbak-manifest.json` when present
 - computes compatibility warnings
 - creates no writes to the live root filesystem
@@ -339,7 +365,7 @@ Rules:
 
 - Requires `--confirm RESTORE`.
 - Requires `--prebackup` pointing to an existing local pre-restore backup.
-- Requires a valid `restore-plan`.
+- Requires the same internal validation as `restore-prepare` to pass for the input archive.
 - Requires the archive's manifest `restore.requires_confirmation` to be honored.
 - Rejects unsupported manifest schemas.
 - Rejects tar members outside `rootfs/`.
@@ -469,7 +495,22 @@ Execute JSON success shape for `--execute 1` when `sysupgrade -r` returns:
 
 If the management connection drops during native restore, LuCI may not receive the execute success JSON.
 In that case LuCI treats the result as unknown after confirmed handoff and tells the operator to reconnect and inspect router state.
-If `sysupgrade -r` returns a non-zero code, the command returns `ok:false` with `code:"sysupgrade_failed"` and `sysupgrade_exit_code`.
+If `sysupgrade -r` returns a non-zero code, the command returns this failure shape:
+
+```json
+{
+  "ok": false,
+  "operation": "restore-sysupgrade",
+  "execute": true,
+  "status": "failed",
+  "code": "sysupgrade_failed",
+  "message": "sysupgrade restore failed",
+  "input": "/tmp/wrtbak/restore-cache/abc-backup.sysupgrade.tar.gz",
+  "prebackup_path": "/tmp/wrtbak/pre-restore-20260626T033000Z.wrtbak",
+  "sysupgrade_exit_code": 1,
+  "reboot_recommended": true
+}
+```
 
 Sysupgrade validation:
 
@@ -503,7 +544,7 @@ Driver rules:
 Remote restore has four gates:
 
 1. **Path gate**: remote path must be under the current device prefix.
-2. **Plan gate**: `restore-plan` must parse and validate the archive.
+2. **Plan gate**: `restore-prepare` must parse and validate the archive.
 3. **Prebackup gate**: a current-state backup must exist before apply.
 4. **Confirmation gate**: apply requires exact confirmation token `RESTORE`.
 
@@ -605,6 +646,7 @@ Local fixture tests:
 - `remote-download` rejects paths outside the current device prefix
 - `remote-download` rejects cache collision without matching sidecar
 - `remote-download` rejects unavailable remote size
+- restore commands reject `LOCAL_ARCHIVE` paths outside the Local Archive Path Policy
 - `remote-download` cache reuse accepts size plus local sha256 when remote hash is unavailable
 - `remote-download` cache reuse checks `remote_modified` or `remote_etag` when a driver provides them
 - every new command returns the standard JSON error envelope
@@ -622,7 +664,10 @@ Local fixture tests:
 - `restore-apply --mode all` writes all archive paths
 - `restore-apply` reports mid-apply failure with log path and written count
 - `restore-sysupgrade` rejects non-sysupgrade input
+- `restore-sysupgrade` rejects missing confirmation
+- `restore-sysupgrade` rejects stale, unrelated, or sha-mismatched prebackup receipts
 - `restore-sysupgrade` parses and honors `--execute 0|1`
+- `restore-sysupgrade` returns the specified `sysupgrade_failed` JSON shape on non-zero exit
 - `restore-sysupgrade` rejects unsafe sysupgrade tar members
 - high-risk services are never automatically restarted and are reported in `blocked_restart_services`
 - LuCI ACL tests verify `/tmp/wrtbak/*` broad read/stat access was removed
@@ -636,8 +681,8 @@ Router QA on `192.168.11.234`:
 - install APK built from GitHub Actions
 - configure existing WebDAV and S3 runtime credentials outside git
 - upload a low-risk test backup to WebDAV and S3
-- download that backup from WebDAV and generate restore plan
-- download that backup from S3 and generate restore plan
+- download that backup from WebDAV and generate a `restore-prepare` plan
+- download that backup from S3 and generate a `restore-prepare` plan
 - run `restore-prebackup`
 - run `restore-apply` against a low-risk test item that writes to a harmless test path
 - confirm the test path content changes after restore
