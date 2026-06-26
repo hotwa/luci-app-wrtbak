@@ -786,7 +786,7 @@ Expected: install succeeds and `remote-status` returns parseable JSON.
 Run on router with credentials supplied outside git:
 
 ```sh
-ssh root@192.168.11.234 "uci set wrtbak.webdav.enabled='1'; uci set wrtbak.webdav.url='\$WEBDAV_URL'; uci set wrtbak.webdav.username='\$WEBDAV_USER'; uci set wrtbak.webdav.password='\$WEBDAV_PASS'; uci set wrtbak.webdav.path='\$WEBDAV_PATH'; uci commit wrtbak"
+ssh root@192.168.11.234 "set the WebDAV runtime UCI values outside git, then run: uci commit wrtbak"
 ```
 
 Expected: UCI commit succeeds. Do not paste credentials into commits, docs, or logs.
