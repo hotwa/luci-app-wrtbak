@@ -54,8 +54,6 @@ assert_skeleton_command() {
 	assert_skeleton_json "$output_file" "$operation"
 }
 
-assert_skeleton_command remote-download \
-	remote-download --target webdav --path bad.wrtbak --json
 assert_skeleton_command restore-prepare \
 	restore-prepare --input /tmp/wrtbak/restore-cache/missing.wrtbak --json
 assert_skeleton_command restore-prebackup \

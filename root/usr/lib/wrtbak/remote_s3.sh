@@ -159,6 +159,65 @@ wrtbak_s3_list_raw() {
 	rm -rf "$wrtbak_tmp"
 }
 
+wrtbak_s3_stat_file() {
+	wrtbak_endpoint=$1
+	wrtbak_region=$2
+	wrtbak_bucket=$3
+	wrtbak_access_key=$4
+	wrtbak_secret_key=$5
+	wrtbak_force_path_style=$6
+	wrtbak_remote_path=$7
+	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-s3-stat.XXXXXX") || return 1
+	wrtbak_config=$(wrtbak_s3_make_config "$wrtbak_tmp" "$wrtbak_endpoint" "$wrtbak_region" "$wrtbak_access_key" "$wrtbak_secret_key" "$wrtbak_force_path_style") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_remote_file_ref=$(wrtbak_s3_remote_ref "$wrtbak_bucket" "$wrtbak_remote_path") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_json="$wrtbak_tmp/lsjson.json"
+
+	if ! wrtbak_s3_rclone "$wrtbak_config" lsjson "$wrtbak_remote_file_ref" > "$wrtbak_json" 2>/dev/null; then
+		rm -rf "$wrtbak_tmp"
+		return 1
+	fi
+
+	wrtbak_line=$(tr '\n' ' ' < "$wrtbak_json")
+	wrtbak_size=$(printf '%s\n' "$wrtbak_line" | sed -n 's/.*"Size"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+	wrtbak_modified=$(printf '%s\n' "$wrtbak_line" | sed -n 's/.*"ModTime"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+	wrtbak_etag=$(printf '%s\n' "$wrtbak_line" | sed -n 's/.*"ETag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+	printf '%s\t%s\t%s\n' "$wrtbak_size" "$wrtbak_modified" "$wrtbak_etag"
+	rm -rf "$wrtbak_tmp"
+}
+
+wrtbak_s3_download_file() {
+	wrtbak_endpoint=$1
+	wrtbak_region=$2
+	wrtbak_bucket=$3
+	wrtbak_access_key=$4
+	wrtbak_secret_key=$5
+	wrtbak_force_path_style=$6
+	wrtbak_remote_path=$7
+	wrtbak_local_path=$8
+	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-s3-download.XXXXXX") || return 1
+	wrtbak_config=$(wrtbak_s3_make_config "$wrtbak_tmp" "$wrtbak_endpoint" "$wrtbak_region" "$wrtbak_access_key" "$wrtbak_secret_key" "$wrtbak_force_path_style") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_remote_file_ref=$(wrtbak_s3_remote_ref "$wrtbak_bucket" "$wrtbak_remote_path") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+
+	if ! wrtbak_s3_rclone "$wrtbak_config" copyto "$wrtbak_remote_file_ref" "$wrtbak_local_path" >/dev/null; then
+		rm -rf "$wrtbak_tmp"
+		return 1
+	fi
+	rm -rf "$wrtbak_tmp"
+	return 0
+}
+
 wrtbak_s3_upload_file() {
 	wrtbak_endpoint=$1
 	wrtbak_region=$2
