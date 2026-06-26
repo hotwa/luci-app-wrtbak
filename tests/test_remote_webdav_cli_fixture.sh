@@ -107,8 +107,18 @@ fi
 case "$method" in
 	PROPFIND)
 		size=$(cat "$WRTBAK_FAKE_STATE_DIR/upload.size" 2>/dev/null || printf 5)
-		printf "<?xml version=\"1.0\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>%s</D:href><D:propstat><D:prop><D:getcontentlength>%s</D:getcontentlength></D:prop></D:propstat></D:response></D:multistatus>
+		uploaded_url=$(cat "$WRTBAK_FAKE_STATE_DIR/upload.url" 2>/dev/null || printf '')
+		if [ -z "$uploaded_url" ] || [ "$url" = "$uploaded_url" ]; then
+			printf "<?xml version=\"1.0\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>%s</D:href><D:propstat><D:prop><D:getcontentlength>%s</D:getcontentlength></D:prop></D:propstat></D:response></D:multistatus>
 " "$url" "$size"
+		else
+			uploaded_href=${uploaded_url#https://webdav.example.invalid}
+			printf "<?xml version=\"1.0\"?><D:multistatus xmlns:D=\"DAV:\">\n"
+			printf "<D:response><D:href>/dav/R2/wrtbak/%s/wrtbak/2026/newer-a.wrtbak</D:href><D:propstat><D:prop><D:getcontentlength>7</D:getcontentlength><D:getlastmodified>Thu, 25 Jun 2026 12:00:00 GMT</D:getlastmodified></D:prop></D:propstat></D:response>\n" "$WRTBAK_FAKE_DEVICE_ID"
+			printf "<D:response><D:href>/dav/R2/wrtbak/%s/wrtbak/2026/newer-b.wrtbak</D:href><D:propstat><D:prop><D:getcontentlength>8</D:getcontentlength><D:getlastmodified>Thu, 25 Jun 2026 11:00:00 GMT</D:getlastmodified></D:prop></D:propstat></D:response>\n" "$WRTBAK_FAKE_DEVICE_ID"
+			printf "<D:response><D:href>%s</D:href><D:propstat><D:prop><D:getcontentlength>%s</D:getcontentlength><D:getlastmodified>Thu, 25 Jun 2026 01:00:00 GMT</D:getlastmodified></D:prop></D:propstat></D:response>\n" "$uploaded_href" "$size"
+			printf "</D:multistatus>\n"
+		fi
 		exit 0
 		;;
 	MKCOL)
@@ -131,10 +141,11 @@ run_cli() {
 	WRTBAK_FAKE_CURL_LOG="$curl_log" \
 	WRTBAK_FAKE_DELETE_LOG="$delete_log" \
 	WRTBAK_FAKE_STATE_DIR="$state_dir" \
+	WRTBAK_FAKE_DEVICE_ID="$device_id" \
 		"$cli" "$@"
 }
 
-run_cli remote-upload --target default --profile webdav-test --items all --format wrtbak --prune-max 0 --json >"$work_dir/upload.json"
+run_cli remote-upload --target default --profile webdav-test --items all --format wrtbak --prune-max 2 --json >"$work_dir/upload.json"
 python3 - "$work_dir/upload.json" "$fixture_root" "$device_id" <<'PY'
 import json, pathlib, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -150,7 +161,15 @@ assert data["remote_path"].endswith(".wrtbak")
 assert data["local_archive_retained"] is False
 assert not pathlib.Path(data["local_archive_path"]).exists()
 assert (root / "overlay/wrtbak/remote-history.jsonl").exists()
+assert data["prune"]["deleted_count"] == 1
+assert data["remote_path"] not in data["prune"]["deleted_paths"]
 PY
+
+uploaded_url=$(cat "$state_dir/upload.url")
+if grep -F -q "$uploaded_url" "$delete_log"; then
+	echo "WebDAV prune deleted the just-uploaded backup" >&2
+	exit 1
+fi
 
 run_cli remote-delete --target default --path "R2/wrtbak/$device_id/wrtbak/2026/webdav-test.wrtbak" --json >"$work_dir/delete.json"
 python3 - "$work_dir/delete.json" <<'PY'
