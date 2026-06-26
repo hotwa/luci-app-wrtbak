@@ -316,7 +316,7 @@ Creates a local pre-restore backup before the apply step.
 
 Rules:
 
-- Must run before `restore-apply`.
+- Must run before `restore-apply` or `restore-sysupgrade`.
 - Uses the current backup item catalog.
 - Defaults to `.wrtbak`.
 - May optionally upload to the default remote target in a later version, but v1 requires at least a local pre-restore archive.
@@ -536,6 +536,7 @@ S3 driver adds:
 Driver rules:
 
 - Credentials must stay in temporary `0600` files or stdin-safe config files.
+- Driver helper parameters named `PASS` or `SECRET` represent internal shell variables only; they must not be passed to external commands through argv.
 - Credentials must never appear in command arguments, history JSONL, LuCI output, or test fixtures.
 - Partial downloads must write to `LOCAL_PATH.part.$$` and rename atomically only after verification.
 
