@@ -525,6 +525,20 @@ if run_cli_with_fake_sha256sum remote-download --target webdav --path "$webdav_p
 	exit 1
 fi
 assert_error_code "$work_dir/hash-fail.json" hash_failed
+[ ! -d "$fixture_root/tmp/wrtbak/remote.lock" ] || {
+	echo "remote lock was not released after hash failure" >&2
+	exit 1
+}
+
+if run_cli_with_fake_sha256sum remote-download --target webdav --path "$webdav_sample" --json >"$work_dir/hash-fail-cache.json"; then
+	echo "remote-download should fail when cache hash calculation fails" >&2
+	exit 1
+fi
+assert_error_code "$work_dir/hash-fail-cache.json" hash_failed
+[ ! -d "$fixture_root/tmp/wrtbak/remote.lock" ] || {
+	echo "remote lock was not released after cache hash failure" >&2
+	exit 1
+}
 
 WRTBAK_FAKE_REMOTE_MODIFIED="Fri, 26 Jun 2026 05:30:00 GMT"
 WRTBAK_FAKE_REMOTE_ETAG="etag-conflict"

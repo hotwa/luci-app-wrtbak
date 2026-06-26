@@ -960,7 +960,12 @@ wrtbak_remote_download() {
 			return 1
 		fi
 		wrtbak_sidecar_sha=$(wrtbak_remote_sidecar_string_field sha256 "$wrtbak_sidecar")
-		wrtbak_local_sha=$(wrtbak_sha256_of "$wrtbak_download_cache_path")
+		wrtbak_local_sha=$(wrtbak_sha256_of "$wrtbak_download_cache_path") || {
+			wrtbak_history_append remote-download "$wrtbak_target" false hash_failed "sha256 calculation failed" "$wrtbak_path"
+			wrtbak_remote_lock_release
+			wrtbak_remote_error_json remote-download "$wrtbak_target" hash_failed "sha256 calculation failed" "$wrtbak_path"
+			return 1
+		}
 		if [ -z "$wrtbak_sidecar_sha" ] || [ "$wrtbak_sidecar_sha" != "$wrtbak_local_sha" ]; then
 			wrtbak_history_append remote-download "$wrtbak_target" false cache_conflict "restore cache sha mismatch" "$wrtbak_path"
 			wrtbak_remote_lock_release
