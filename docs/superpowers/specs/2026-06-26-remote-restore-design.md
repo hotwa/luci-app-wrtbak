@@ -97,8 +97,15 @@ Rules:
 - The selected target must be enabled and valid.
 - The remote path must pass the same current-device-prefix validation used by `remote-delete`.
 - The file suffix must be `.wrtbak` or `.sysupgrade.tar.gz`.
-- Existing cache files may be overwritten only when they match the same remote path and size, or when `--force-cache` is added in a later version.
-- The command verifies local file size against the remote size when the driver can provide it.
+- The command acquires the remote operation lock before downloading.
+- Cache filenames are deterministic: `<sha256(remote_path)-12>-<safe-basename>`.
+- A sidecar file `<local_path>.remote.json` records `target`, `driver`, `remote_path`, `filename`, `format`, `size`, `downloaded_at`, and `sha256`.
+- Existing cache files may be reused only when the sidecar `target`, `remote_path`, `size`, and `sha256` match the remote metadata and local file.
+- Cache collision without a matching sidecar returns `ok:false` with `code:"cache_conflict"`.
+- The command verifies local file size against the remote size.
+- If the remote driver cannot determine size, v1 returns `ok:false` with `code:"size_unavailable"` instead of downloading.
+- Partial downloads write to `<local_path>.part.$$` and are removed on failure.
+- Successful downloads rename the partial file atomically, compute sha256, then write the sidecar atomically.
 - The command writes a sanitized history record.
 
 JSON success shape:
@@ -110,10 +117,12 @@ JSON success shape:
   "target": "webdav",
   "driver": "curl",
   "remote_path": "R2/wrtbak/device/wrtbak/2026/backup.wrtbak",
-  "local_path": "/tmp/wrtbak/restore-cache/backup.wrtbak",
+  "local_path": "/tmp/wrtbak/restore-cache/abc123-backup.wrtbak",
+  "sidecar_path": "/tmp/wrtbak/restore-cache/abc123-backup.wrtbak.remote.json",
   "filename": "backup.wrtbak",
   "format": "wrtbak",
-  "size": 12345
+  "size": 12345,
+  "sha256": "..."
 }
 ```
 
@@ -126,12 +135,76 @@ wrtbak restore-prepare --input LOCAL_ARCHIVE --json
 Runs all read-only checks needed before an apply:
 
 - validates that the local path is under the restore cache or `/tmp/wrtbak`
-- runs `inspect`
-- runs `restore-plan --json`
+- determines archive format from the filename and tar structure
+- for `.wrtbak`, validates `manifest.json` and `rootfs/`, then runs the same validation as `restore-plan --json`
+- for `.sysupgrade.tar.gz`, validates root-relative tar members and reads `etc/backup/wrtbak-manifest.json` when present
 - computes compatibility warnings
 - creates no writes to the live root filesystem
 
 This command exists so LuCI can have a stable single command for the review step.
+
+JSON success shape:
+
+```json
+{
+  "ok": true,
+  "operation": "restore-prepare",
+  "input": "/tmp/wrtbak/restore-cache/abc-backup.wrtbak",
+  "format": "wrtbak",
+  "archive": {
+    "filename": "backup.wrtbak",
+    "size": 12345,
+    "sha256": "..."
+  },
+  "current_device": {
+    "device_id": "current-device",
+    "hostname": "dae-wrt",
+    "board": "jdcloud-re-ss-01",
+    "firmware": "ImmortalWrt SNAPSHOT"
+  },
+  "source_device": {
+    "device_id": "source-device",
+    "hostname": "source",
+    "board": "jdcloud-re-ss-01",
+    "firmware": "ImmortalWrt SNAPSHOT"
+  },
+  "manifest": {
+    "schema": "wrtbak/v1",
+    "profile": "auto",
+    "created_at": "2026-06-26T03:30:00Z"
+  },
+  "compatibility": {
+    "blocking": false,
+    "warnings": [
+      {
+        "code": "device_id_mismatch",
+        "severity": "warning",
+        "message": "Backup source device differs from current device."
+      }
+    ]
+  },
+  "plan": {
+    "file_count": 12,
+    "total_bytes": 34567,
+    "paths": [],
+    "restart_services": ["network"],
+    "reboot_recommended": true,
+    "requires_confirmation": true
+  }
+}
+```
+
+All command errors use the existing envelope:
+
+```json
+{
+  "ok": false,
+  "operation": "restore-prepare",
+  "code": "invalid_archive",
+  "message": "restore archive is not valid",
+  "detail": "manifest.json is missing"
+}
+```
 
 ### `restore-prebackup`
 
@@ -148,6 +221,37 @@ Rules:
 - Defaults to `.wrtbak`.
 - May optionally upload to the default remote target in a later version, but v1 requires at least a local pre-restore archive.
 - Returns `ok:false` when archive creation fails.
+
+JSON success shape:
+
+```json
+{
+  "ok": true,
+  "operation": "restore-prebackup",
+  "profile": "pre-restore",
+  "items": "all",
+  "format": "wrtbak",
+  "path": "/tmp/wrtbak/pre-restore-20260626T033000Z.wrtbak",
+  "filename": "pre-restore-20260626T033000Z.wrtbak",
+  "size": 12345,
+  "sha256": "...",
+  "created_at": "2026-06-26T03:30:00Z",
+  "receipt_path": "/tmp/wrtbak/pre-restore-20260626T033000Z.wrtbak.receipt.json"
+}
+```
+
+The receipt contains the same fields plus `operation`, `host_device_id`, and `host_hostname`.
+`restore-apply` and `restore-sysupgrade` must validate the receipt before any live write:
+
+- receipt file exists
+- receipt `path` equals `--prebackup`
+- prebackup archive exists
+- prebackup size and sha256 match the receipt
+- receipt `host_device_id` equals the current device ID
+- receipt age is less than 24 hours unless a later version adds an override
+- receipt format is `wrtbak`
+
+Failure returns `ok:false` with `code:"invalid_prebackup"`.
 
 ### `restore-apply`
 
@@ -174,6 +278,45 @@ Rules:
 - In `all` mode, writes all files from the archive.
 - Records a restore log under `/tmp/wrtbak/restore-logs/`.
 
+Selected item mapping:
+
+- The item catalog remains the source of truth for item ID to path mapping.
+- For each selected item ID, collect its configured files and directories from the current catalog.
+- Unknown item IDs are blocking and return `code:"invalid_items"`.
+- A restored archive file is eligible when its target path exactly equals a selected file path or is below a selected directory path.
+- Overlapping items are de-duplicated by final target path before validation or writing.
+- When an item path in the current catalog is absent from the archive, it is reported as `missing_from_archive` but does not fail the restore.
+- Files present in the archive but not selected are skipped and reported as skipped.
+- Directory selections include regular files recursively and create needed directories.
+
+Write-phase safety:
+
+- All archive validation completes before the first live write.
+- The extracted archive file size and sha256 must match `manifest.files[]` when the manifest provides those fields.
+- Any mismatch returns `code:"archive_mismatch"` and writes nothing.
+- The writer copies each file to `<target>.wrtbak-restore.$$`, fsyncs when supported, chmods, then renames into place.
+- A per-file backup of the previous file is written under the restore log directory before replacement when the previous target exists.
+- If any write fails, the command stops, reports `ok:false`, includes `written_count`, `failed_path`, and `restore_log`, and does not attempt automatic rollback in v1.
+- The restore log is line-delimited JSON with `timestamp`, `operation`, `target_path`, `status`, `source_path`, `mode`, and optional `error`.
+
+JSON success shape:
+
+```json
+{
+  "ok": true,
+  "operation": "restore-apply",
+  "input": "/tmp/wrtbak/restore-cache/abc-backup.wrtbak",
+  "mode": "selected",
+  "items": "test-restore",
+  "written_count": 2,
+  "skipped_count": 10,
+  "prebackup_path": "/tmp/wrtbak/pre-restore-20260626T033000Z.wrtbak",
+  "restore_log": "/tmp/wrtbak/restore-logs/restore-20260626T033100Z.jsonl",
+  "restart_services": [],
+  "reboot_recommended": false
+}
+```
+
 Service handling:
 
 - The command returns the services recommended by the manifest.
@@ -194,10 +337,21 @@ Rules:
 
 - Requires `--confirm RESTORE`.
 - Requires an existing pre-restore backup.
-- Runs `tar tzf` safety validation before invoking `sysupgrade -r`.
+- Validates the prebackup receipt the same way as `restore-apply`.
+- Runs sysupgrade-specific `tar tzf` safety validation before invoking `sysupgrade -r`.
 - Does not attempt file-level selective restore.
-- Returns JSON before invoking the final native command when possible.
+- Prints a JSON preflight result and exits unless `--execute 1` is provided.
+- With `--execute 1`, invokes `sysupgrade -r LOCAL_ARCHIVE` after printing the preflight JSON.
 - LuCI must warn that the current management session can be interrupted.
+
+Sysupgrade validation:
+
+- Tar members are root-relative.
+- Reject absolute paths, `..`, symlinks, hard links, devices, FIFOs, and sockets.
+- Allow regular files and directories only.
+- If `etc/backup/wrtbak-manifest.json` exists, validate schema and compatibility warnings.
+- If no wrtbak manifest exists, allow native restore only with a visible `manifest_missing` warning.
+- `.wrtbak` archives are rejected by `restore-sysupgrade`; `.sysupgrade.tar.gz` archives are rejected by `restore-apply`.
 
 ## Remote Driver Additions
 
@@ -264,17 +418,38 @@ LuCI must call stable JSON commands only:
 
 LuCI must not show secret file contents. It may show paths, counts, service names, manifest metadata, and warnings.
 
+LuCI state transitions:
+
+1. `idle`
+2. `downloading`
+3. `prepared`
+4. `prebackup_ready`
+5. `applying`
+6. `applied` or `failed`
+
+The UI must not enable apply buttons outside `prebackup_ready`.
+Refreshing the remote list resets the restore panel to `idle`.
+
+Server-side enforcement remains authoritative. Even if a LuCI button is enabled incorrectly, `restore-apply` and `restore-sysupgrade` must reject missing confirmation, invalid prebackup receipts, invalid paths, and unsafe archives.
+
 ## ACL Changes
 
 `root/usr/share/rpcd/acl.d/luci-app-wrtbak.json` must allow:
 
+Read-only exec permissions:
+
 - `/usr/bin/wrtbak remote-download *`
 - `/usr/bin/wrtbak restore-prepare *`
+
+Write exec permissions:
+
 - `/usr/bin/wrtbak restore-prebackup *`
 - `/usr/bin/wrtbak restore-apply *`
 - `/usr/bin/wrtbak restore-sysupgrade *`
 
 Existing backup and remote permissions remain unchanged.
+No broad filesystem read/write ACL is granted for `/tmp/wrtbak/restore-cache/*`.
+LuCI interacts with cache files only through `wrtbak` commands.
 
 ## Testing Strategy
 
@@ -285,14 +460,25 @@ Local fixture tests:
 - fake S3 download succeeds and verifies size
 - credentials do not leak into command arguments
 - `remote-download` rejects paths outside the current device prefix
+- `remote-download` rejects cache collision without matching sidecar
+- `remote-download` rejects unavailable remote size
+- every new command returns the standard JSON error envelope
 - `restore-prepare` returns plan JSON for a valid `.wrtbak`
+- `restore-prepare` returns sysupgrade metadata and warnings for a valid `.sysupgrade.tar.gz`
 - `restore-apply` rejects missing confirmation
 - `restore-apply` rejects missing prebackup
+- `restore-apply` rejects stale, unrelated, or sha-mismatched prebackup receipts
 - `restore-apply` rejects unsafe tar members
+- `restore-apply` rejects manifest file size or sha mismatch before writing
 - `restore-apply --mode selected` writes only selected item paths
+- `restore-apply --mode selected` de-duplicates overlapping selected item paths
 - `restore-apply --mode all` writes all archive paths
+- `restore-apply` reports mid-apply failure with log path and written count
 - `restore-sysupgrade` rejects non-sysupgrade input
+- `restore-sysupgrade` rejects unsafe sysupgrade tar members
+- high-risk service restart is blocked unless explicitly requested
 - LuCI layout contains restore buttons, review panel, confirmation input, and apply buttons
+- LuCI tests verify prepare, prebackup, and apply command argument mapping
 
 Router QA on `192.168.11.234`:
 
@@ -306,6 +492,7 @@ Router QA on `192.168.11.234`:
 - confirm the test path content changes after restore
 - confirm WebDAV/S3 restore flows do not leave UCI changes unless the selected test item intentionally targets UCI
 - verify LuCI restore review can load remote backup metadata
+- verify LuCI can drive prebackup and apply for the low-risk test item
 
 High-risk network restore is not part of automated router QA. It remains manual and requires a human-selected maintenance window.
 
@@ -337,5 +524,6 @@ The feature is complete only when:
 - WebDAV remote download, prepare, prebackup, apply, and verification pass
 - S3 remote download, prepare, prebackup, apply, and verification pass
 - LuCI restore controls render and can drive the prepare path
+- LuCI restore controls can drive prebackup and low-risk apply paths
 - no plaintext remote credentials are committed or printed
 - the implementation is merged to `main`
