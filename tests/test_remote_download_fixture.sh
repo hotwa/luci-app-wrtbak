@@ -214,7 +214,27 @@ EOT
 chmod +x "$bin_dir/rclone"
 
 run_cli() {
-	PATH="$bin_dir:$PATH" \
+	run_cli_with_path "$bin_dir" "$@"
+}
+
+make_fake_path() {
+	wrtbak_fake_path=$1
+	wrtbak_hide_1=${2:-}
+	wrtbak_hide_2=${3:-}
+	[ -d "$wrtbak_fake_path" ] || {
+		mkdir -p "$wrtbak_fake_path"
+		for wrtbak_src_name in awk basename cat chmod cut date dirname grep ln mkdir mktemp rm sed sha256sum sort stat tail tr wc; do
+			[ -n "$wrtbak_hide_1" ] && [ "$wrtbak_src_name" = "$wrtbak_hide_1" ] && continue
+			[ -n "$wrtbak_hide_2" ] && [ "$wrtbak_src_name" = "$wrtbak_hide_2" ] && continue
+			wrtbak_src_file=$(command -v "$wrtbak_src_name") || continue
+			[ -e "$wrtbak_fake_path/$wrtbak_src_name" ] || ln -s "$wrtbak_src_file" "$wrtbak_fake_path/$wrtbak_src_name"
+		done
+	}
+}
+
+run_cli_with_path() {
+	wrtbak_path_prefix=$1
+	shift
 	WRTBAK_ROOT="$fixture_root" \
 	WRTBAK_LIBDIR="$libdir" \
 	WRTBAK_FAKE_CURL_LOG="$curl_log" \
@@ -230,7 +250,53 @@ run_cli() {
 	WRTBAK_FAKE_SIZE_UNAVAILABLE="${WRTBAK_FAKE_SIZE_UNAVAILABLE:-0}" \
 	WRTBAK_FAKE_DOWNLOAD_FAIL="${WRTBAK_FAKE_DOWNLOAD_FAIL:-0}" \
 	WRTBAK_FAKE_NO_METADATA="${WRTBAK_FAKE_NO_METADATA:-0}" \
+	PATH="$wrtbak_path_prefix:$PATH" \
 		"$cli" "$@"
+}
+
+run_cli_with_exact_path() {
+	wrtbak_exact_path=$1
+	shift
+	WRTBAK_ROOT="$fixture_root" \
+	WRTBAK_LIBDIR="$libdir" \
+	WRTBAK_FAKE_CURL_LOG="$curl_log" \
+	WRTBAK_FAKE_RCLONE_LOG="$rclone_log" \
+	WRTBAK_FAKE_NETRC_LOG="$netrc_log" \
+	WRTBAK_FAKE_RCLONE_CONFIG_LOG="$config_log" \
+	WRTBAK_FAKE_DOWNLOAD_LOG="$download_log" \
+	WRTBAK_FAKE_STATE_DIR="$state_dir" \
+	WRTBAK_FAKE_REMOTE_CONTENT="${WRTBAK_FAKE_REMOTE_CONTENT:-$sample_content}" \
+	WRTBAK_FAKE_REMOTE_SIZE="${WRTBAK_FAKE_REMOTE_SIZE:-}" \
+	WRTBAK_FAKE_REMOTE_MODIFIED="${WRTBAK_FAKE_REMOTE_MODIFIED:-}" \
+	WRTBAK_FAKE_REMOTE_ETAG="${WRTBAK_FAKE_REMOTE_ETAG:-}" \
+	WRTBAK_FAKE_SIZE_UNAVAILABLE="${WRTBAK_FAKE_SIZE_UNAVAILABLE:-0}" \
+	WRTBAK_FAKE_DOWNLOAD_FAIL="${WRTBAK_FAKE_DOWNLOAD_FAIL:-0}" \
+	WRTBAK_FAKE_NO_METADATA="${WRTBAK_FAKE_NO_METADATA:-0}" \
+	PATH="$wrtbak_exact_path" \
+		"$cli" "$@"
+}
+
+run_cli_without_dependency() {
+	wrtbak_missing_tool=$1
+	shift
+	wrtbak_missing_tool_bin="$work_dir/no-$wrtbak_missing_tool-bin"
+	make_fake_path "$wrtbak_missing_tool_bin" "$wrtbak_missing_tool"
+	run_cli_with_exact_path "$wrtbak_missing_tool_bin" "$@"
+}
+
+run_cli_with_fake_sha256sum() {
+	wrtbak_fake_sha256_dir="$work_dir/fake-sha256-bin"
+	make_fake_path "$wrtbak_fake_sha256_dir" curl rclone
+	rm -f "$wrtbak_fake_sha256_dir/sha256sum"
+	cat >"$wrtbak_fake_sha256_dir/sha256sum" <<'EOT'
+#!/bin/sh
+if [ "$#" -eq 0 ]; then
+	exec /usr/bin/sha256sum
+fi
+exit 99
+EOT
+	chmod +x "$wrtbak_fake_sha256_dir/sha256sum"
+	run_cli_with_path "$wrtbak_fake_sha256_dir:$bin_dir" "$@"
 }
 
 run_success() {
@@ -301,6 +367,10 @@ for field in [
     "remote_etag",
     "downloaded_at",
     "sha256",
+    "provider",
+    "remote_name",
+    "cache_path",
+    "mtime",
 ]:
     assert field in sidecar, field
 
@@ -312,6 +382,10 @@ assert sidecar["format"] == "wrtbak"
 assert sidecar["size"] == len(content)
 assert sidecar["remote_modified"] == sidecar_modified
 assert sidecar["remote_etag"] == sidecar_etag
+assert sidecar["provider"] == sidecar["target"]
+assert sidecar["remote_name"] == sidecar["target"]
+assert sidecar["cache_path"] == data["local_path"]
+assert sidecar["mtime"] == sidecar_modified
 assert sidecar["downloaded_at"].endswith("Z")
 assert sidecar["sha256"] == expected_sha
 PY
@@ -394,7 +468,19 @@ if run_cli remote-download --target webdav --path "R2/wrtbak/other-device/wrtbak
 	echo "remote-download should fail outside the current device prefix" >&2
 	exit 1
 fi
-assert_error_code "$work_dir/invalid-prefix.json" ""
+assert_error_code "$work_dir/invalid-prefix.json" invalid_config
+
+if run_cli remote-download --target unknown --path "$webdav_sample" --json >"$work_dir/unknown-target.json"; then
+	echo "remote-download should fail with unsupported provider for unknown target" >&2
+	exit 1
+fi
+assert_error_code "$work_dir/unknown-target.json" unsupported_provider
+
+if run_cli_without_dependency curl remote-download --target webdav --path "$webdav_sample" --json >"$work_dir/missing-curl.json"; then
+	echo "remote-download should fail when curl is unavailable" >&2
+	exit 1
+fi
+assert_error_code "$work_dir/missing-curl.json" missing_tool
 
 if run_cli remote-download --target webdav --path "$webdav_prefix/wrtbak/2026/sample.txt" --json >"$work_dir/unsupported-suffix.json"; then
 	echo "remote-download should fail unsupported suffixes" >&2
@@ -415,12 +501,30 @@ if run_cli remote-download --target webdav --path "$webdav_prefix/wrtbak/2026/do
 	echo "remote-download should fail when the driver download fails" >&2
 	exit 1
 fi
-assert_error_code "$work_dir/download-fail.json" command_failed
+assert_error_code "$work_dir/download-fail.json" download_failed
 if find "$fixture_root/tmp/wrtbak/restore-cache" -name '*.part.*' -print | grep . >/dev/null 2>&1; then
 	echo "partial download file was not removed" >&2
 	exit 1
 fi
 WRTBAK_FAKE_DOWNLOAD_FAIL=0
+
+WRTBAK_FAKE_REMOTE_SIZE=999
+if run_cli remote-download --target webdav --path "$webdav_prefix/wrtbak/2026/size-mismatch.wrtbak" --json >"$work_dir/size-mismatch.json"; then
+	echo "remote-download should fail when downloaded size mismatch happens" >&2
+	exit 1
+fi
+assert_error_code "$work_dir/size-mismatch.json" download_failed
+if find "$fixture_root/tmp/wrtbak/restore-cache" -name '*.part.*' -print | grep . >/dev/null 2>&1; then
+	echo "partial download file was not removed after size mismatch" >&2
+	exit 1
+fi
+WRTBAK_FAKE_REMOTE_SIZE=
+
+if run_cli_with_fake_sha256sum remote-download --target webdav --path "$webdav_prefix/wrtbak/2026/hash-fail.wrtbak" --json >"$work_dir/hash-fail.json"; then
+	echo "remote-download should fail when hash calculation fails" >&2
+	exit 1
+fi
+assert_error_code "$work_dir/hash-fail.json" hash_failed
 
 WRTBAK_FAKE_REMOTE_MODIFIED="Fri, 26 Jun 2026 05:30:00 GMT"
 WRTBAK_FAKE_REMOTE_ETAG="etag-conflict"
@@ -439,6 +543,12 @@ if run_cli remote-download --target webdav --path "$conflict_path" --json >"$wor
 	exit 1
 fi
 assert_error_code "$work_dir/cache-conflict.json" cache_conflict
+
+if run_cli_without_dependency rclone remote-download --target s3 --path "$s3_sample" --json >"$work_dir/missing-rclone.json"; then
+	echo "remote-download should fail when rclone is unavailable" >&2
+	exit 1
+fi
+assert_error_code "$work_dir/missing-rclone.json" missing_tool
 
 for forbidden in webdav-pass-value s3-access-value s3-secret-value; do
 	if grep -q "$forbidden" "$curl_log" "$rclone_log"; then

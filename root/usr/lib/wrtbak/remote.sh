@@ -697,7 +697,7 @@ wrtbak_remote_write_sidecar() {
 	wrtbak_write_remote_modified=$9
 	shift 9
 	wrtbak_write_remote_etag=$1
-	wrtbak_write_sha=$(wrtbak_sha256_of "$wrtbak_write_local_path") || return 1
+	wrtbak_write_sha=$(wrtbak_sha256_of "$wrtbak_write_local_path") || return 2
 	wrtbak_write_tmp="$wrtbak_write_sidecar.tmp.$$"
 	rm -f "$wrtbak_write_tmp" 2>/dev/null || true
 	: > "$wrtbak_write_tmp" || return 1
@@ -716,7 +716,11 @@ wrtbak_remote_write_sidecar() {
 		printf '  "remote_modified": '; wrtbak_json_string "$wrtbak_write_remote_modified"; printf ',\n'
 		printf '  "remote_etag": '; wrtbak_json_string "$wrtbak_write_remote_etag"; printf ',\n'
 		printf '  "downloaded_at": '; wrtbak_json_string "$(wrtbak_created_at)"; printf ',\n'
-		printf '  "sha256": '; wrtbak_json_string "$wrtbak_write_sha"; printf '\n'
+		printf '  "sha256": '; wrtbak_json_string "$wrtbak_write_sha"; printf ',\n'
+		printf '  "provider": '; wrtbak_json_string "$wrtbak_write_target"; printf ',\n'
+		printf '  "remote_name": '; wrtbak_json_string "$wrtbak_write_target"; printf ',\n'
+		printf '  "cache_path": '; wrtbak_json_string "$wrtbak_write_local_path"; printf ',\n'
+		printf '  "mtime": '; wrtbak_json_string "$wrtbak_write_remote_modified"; printf '\n'
 		printf '}\n'
 	} > "$wrtbak_write_tmp" || {
 		rm -f "$wrtbak_write_tmp"
@@ -724,7 +728,7 @@ wrtbak_remote_write_sidecar() {
 	}
 	if ! mv -f "$wrtbak_write_tmp" "$wrtbak_write_sidecar"; then
 		rm -f "$wrtbak_write_tmp"
-		return 1
+		return 3
 	fi
 }
 
@@ -834,30 +838,35 @@ wrtbak_remote_download_into_cache() {
 	rm -f "$wrtbak_download_part"
 	if ! wrtbak_remote_download_driver "$wrtbak_download_cache_target" "$wrtbak_download_cache_remote_path" "$wrtbak_download_part"; then
 		rm -f "$wrtbak_download_part"
-		return 1
+		return 10
 	fi
 	wrtbak_download_actual_size=$(stat -c '%s' "$wrtbak_download_part" 2>/dev/null) || {
 		rm -f "$wrtbak_download_part"
-		return 1
+		return 11
 	}
 	if [ "$wrtbak_download_actual_size" != "$wrtbak_download_cache_size" ]; then
 		rm -f "$wrtbak_download_part"
-		return 1
+		return 11
 	fi
 	if ! mv -f "$wrtbak_download_part" "$wrtbak_download_cache_local_path"; then
 		rm -f "$wrtbak_download_part"
-		return 1
+		return 12
 	fi
-	if ! wrtbak_remote_write_sidecar "$wrtbak_download_cache_sidecar" "$wrtbak_download_cache_local_path" "$wrtbak_download_cache_target" "$wrtbak_download_cache_driver" "$wrtbak_download_cache_remote_path" "$wrtbak_download_cache_filename" "$wrtbak_download_cache_format" "$wrtbak_download_cache_size" "$wrtbak_download_cache_remote_modified" "$wrtbak_download_cache_remote_etag"; then
+	wrtbak_sidecar_status=0
+	wrtbak_remote_write_sidecar "$wrtbak_download_cache_sidecar" "$wrtbak_download_cache_local_path" "$wrtbak_download_cache_target" "$wrtbak_download_cache_driver" "$wrtbak_download_cache_remote_path" "$wrtbak_download_cache_filename" "$wrtbak_download_cache_format" "$wrtbak_download_cache_size" "$wrtbak_download_cache_remote_modified" "$wrtbak_download_cache_remote_etag" || wrtbak_sidecar_status=$?
+	if [ "$wrtbak_sidecar_status" -ne 0 ]; then
 		rm -f "$wrtbak_download_cache_local_path"
-		return 1
+		if [ "$wrtbak_sidecar_status" -eq 2 ]; then
+			return 13
+		fi
+		return 14
 	fi
 	return 0
 }
 
 wrtbak_remote_download() {
 	wrtbak_target=$(wrtbak_remote_resolve_target "$1") || {
-		wrtbak_remote_error_json remote-download "$1" invalid_config "unknown remote target" ""
+		wrtbak_remote_error_json remote-download "$1" unsupported_provider "unknown remote target" ""
 		return 1
 	}
 	wrtbak_requested_path=$2
@@ -868,7 +877,10 @@ wrtbak_remote_download() {
 				wrtbak_remote_error_json remote-download "$wrtbak_target" invalid_config "WebDAV target is incomplete" ""
 				return 1
 			}
-			wrtbak_remote_require_dependency curl remote-download "$wrtbak_target" || return 1
+			if ! command -v curl >/dev/null 2>&1; then
+				wrtbak_remote_error_json remote-download "$wrtbak_target" missing_tool "curl is not installed" ""
+				return 1
+			fi
 			wrtbak_download_driver_name=curl
 			;;
 		s3)
@@ -876,7 +888,10 @@ wrtbak_remote_download() {
 				wrtbak_remote_error_json remote-download "$wrtbak_target" invalid_config "S3 target is incomplete" ""
 				return 1
 			}
-			wrtbak_remote_require_dependency rclone remote-download "$wrtbak_target" || return 1
+			if ! command -v rclone >/dev/null 2>&1; then
+				wrtbak_remote_error_json remote-download "$wrtbak_target" missing_tool "rclone is not installed" ""
+				return 1
+			fi
 			wrtbak_download_driver_name=rclone
 			;;
 	esac
@@ -962,13 +977,38 @@ wrtbak_remote_download() {
 		rm -f "$wrtbak_sidecar"
 	fi
 
-	if ! wrtbak_remote_download_into_cache "$wrtbak_target" "$wrtbak_download_driver_name" "$wrtbak_path" "$wrtbak_download_cache_path" "$wrtbak_sidecar" "$wrtbak_filename" "$wrtbak_format" "$wrtbak_size" "$wrtbak_remote_modified" "$wrtbak_remote_etag"; then
-		wrtbak_history_append remote-download "$wrtbak_target" false command_failed "download failed" "$wrtbak_path"
+	wrtbak_download_status=0
+	wrtbak_remote_download_into_cache "$wrtbak_target" "$wrtbak_download_driver_name" "$wrtbak_path" "$wrtbak_download_cache_path" "$wrtbak_sidecar" "$wrtbak_filename" "$wrtbak_format" "$wrtbak_size" "$wrtbak_remote_modified" "$wrtbak_remote_etag" || wrtbak_download_status=$?
+	if [ "$wrtbak_download_status" -ne 0 ]; then
+		wrtbak_download_message="remote download failed"
+		case "$wrtbak_download_status" in
+			10|11)
+				wrtbak_download_code=download_failed
+				;;
+			13)
+				wrtbak_download_code=hash_failed
+				wrtbak_download_message="sha256 calculation failed"
+				;;
+			14)
+				wrtbak_download_code=cache_write_failed
+				wrtbak_download_message="sidecar write failed"
+				;;
+			*)
+				wrtbak_download_code=download_failed
+				;;
+		esac
+		wrtbak_history_append remote-download "$wrtbak_target" false "$wrtbak_download_code" "$wrtbak_download_message" "$wrtbak_path"
 		wrtbak_remote_lock_release
-		wrtbak_remote_error_json remote-download "$wrtbak_target" command_failed "remote download failed" ""
+		wrtbak_remote_error_json remote-download "$wrtbak_target" "$wrtbak_download_code" "$wrtbak_download_message" ""
 		return 1
 	fi
-	wrtbak_sha=$(wrtbak_sha256_of "$wrtbak_download_cache_path")
+	wrtbak_sha=$(wrtbak_sha256_of "$wrtbak_download_cache_path") || {
+		rm -f "$wrtbak_download_cache_path" "$wrtbak_sidecar"
+		wrtbak_history_append remote-download "$wrtbak_target" false hash_failed "sha256 calculation failed" "$wrtbak_path"
+		wrtbak_remote_lock_release
+		wrtbak_remote_error_json remote-download "$wrtbak_target" hash_failed "sha256 calculation failed" ""
+		return 1
+	}
 	wrtbak_history_append remote-download "$wrtbak_target" true "" "download complete" "$wrtbak_path"
 	wrtbak_remote_lock_release
 	wrtbak_remote_download_success_json "$wrtbak_target" "$wrtbak_download_driver_name" "$wrtbak_path" "$wrtbak_download_cache_path" "$wrtbak_sidecar" "$wrtbak_filename" "$wrtbak_format" "$wrtbak_size" "$wrtbak_remote_modified" "$wrtbak_remote_etag" "$wrtbak_sha"
