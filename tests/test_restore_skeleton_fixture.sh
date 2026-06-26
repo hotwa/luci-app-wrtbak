@@ -102,9 +102,20 @@ assert os.path.isfile(fixture_root + data["path"])
 assert os.path.isfile(fixture_root + data["receipt_path"])
 PY
 
-assert_skeleton_command restore-apply \
-	restore-apply --input /tmp/wrtbak/restore-cache/sample.wrtbak --mode all --items all --prebackup /tmp/wrtbak/pre-restore-sample.wrtbak --confirm RESTORE --restart-services 0 --json
-assert_skeleton_command restore-sysupgrade \
-	restore-sysupgrade --input /tmp/wrtbak/restore-cache/sample.sysupgrade.tar.gz --prebackup /tmp/wrtbak/pre-restore-sample.wrtbak --confirm RESTORE --execute 0 --json
+apply_output="$work_dir/restore-apply-invalid-prebackup.json"
+if run_cli restore-apply --input /tmp/wrtbak/restore-cache/sample.wrtbak --mode all --items all --prebackup /tmp/wrtbak/pre-restore-sample.wrtbak --confirm RESTORE --restart-services 0 --json >"$apply_output"; then
+	echo "expected restore-apply invalid prebackup command to fail" >&2
+	cat "$apply_output" >&2
+	exit 1
+fi
+assert_error_code "$apply_output" restore-apply invalid_prebackup
+
+sysupgrade_output="$work_dir/restore-sysupgrade-invalid-prebackup.json"
+if run_cli restore-sysupgrade --input /tmp/wrtbak/restore-cache/sample.sysupgrade.tar.gz --prebackup /tmp/wrtbak/pre-restore-sample.wrtbak --confirm RESTORE --execute 0 --json >"$sysupgrade_output"; then
+	echo "expected restore-sysupgrade invalid prebackup command to fail" >&2
+	cat "$sysupgrade_output" >&2
+	exit 1
+fi
+assert_error_code "$sysupgrade_output" restore-sysupgrade invalid_prebackup
 
 echo "fixture restore skeleton command test passed"
