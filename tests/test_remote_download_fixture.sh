@@ -89,6 +89,8 @@ previous=
 method=GET
 output=
 location=0
+dump_headers=
+url=
 for arg in "$@"; do
 	if [ "$previous" = "--netrc-file" ]; then
 		printf '%s\n' "$arg" >>"$WRTBAK_FAKE_NETRC_LOG"
@@ -104,9 +106,17 @@ for arg in "$@"; do
 	if [ "$previous" = "-o" ] || [ "$previous" = "--output" ]; then
 		output=$arg
 	fi
+	if [ "$previous" = "-D" ] || [ "$previous" = "--dump-header" ]; then
+		dump_headers=$arg
+	fi
 	if [ "$arg" = "-L" ] || [ "$arg" = "--location" ]; then
 		location=1
 	fi
+	case "$arg" in
+		http://*|https://*)
+			url=$arg
+			;;
+	esac
 	previous=$arg
 done
 
@@ -131,14 +141,28 @@ if [ "$method" = "PROPFIND" ]; then
 fi
 
 if [ -n "$output" ]; then
+	case "$url" in
+		https://storage.example.invalid/*)
+			[ -z "$dump_headers" ] || printf 'HTTP/1.1 200 OK\r\nContent-Length: %s\r\n\r\n' "$size" > "$dump_headers"
+			printf '%s' "$content" > "$output"
+			printf 'webdav\t%s\n' "$output" >>"$WRTBAK_FAKE_DOWNLOAD_LOG"
+			exit 0
+			;;
+	esac
 	if [ "${WRTBAK_FAKE_DOWNLOAD_FAIL:-0}" = "1" ]; then
 		printf 'partial' > "$output"
 		exit 55
 	fi
-	if [ "${WRTBAK_FAKE_DOWNLOAD_REDIRECT:-0}" = "1" ] && [ "$location" != "1" ]; then
+	if [ "${WRTBAK_FAKE_DOWNLOAD_REDIRECT:-0}" = "1" ] && [ "$location" = "1" ]; then
+		printf 'forbidden' > "$output"
+		exit 22
+	fi
+	if [ "${WRTBAK_FAKE_DOWNLOAD_REDIRECT:-0}" = "1" ]; then
+		[ -z "$dump_headers" ] || printf 'HTTP/1.1 302 Found\r\nLocation: https://example.invalid/proxy/sample.wrtbak\r\nContent-Length: 70\r\n\r\n' > "$dump_headers"
 		printf '<a href="https://storage.example.invalid/sample.wrtbak">Found</a>.' > "$output"
 		exit 0
 	fi
+	[ -z "$dump_headers" ] || printf 'HTTP/1.1 200 OK\r\nContent-Length: %s\r\n\r\n' "$size" > "$dump_headers"
 	printf '%s' "$content" > "$output"
 	printf 'webdav\t%s\n' "$output" >>"$WRTBAK_FAKE_DOWNLOAD_LOG"
 	exit 0

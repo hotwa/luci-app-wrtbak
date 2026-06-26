@@ -234,13 +234,46 @@ wrtbak_webdav_download_file() {
 		rm -rf "$wrtbak_tmp"
 		return 1
 	}
+	wrtbak_headers="$wrtbak_tmp/headers"
+	wrtbak_body="$wrtbak_tmp/body"
 
-	if ! wrtbak_webdav_curl "$wrtbak_netrc" -L -o "$wrtbak_local_path" "$wrtbak_file_url" >/dev/null; then
+	if ! wrtbak_webdav_curl "$wrtbak_netrc" -D "$wrtbak_headers" -o "$wrtbak_body" "$wrtbak_file_url" >/dev/null; then
 		rm -rf "$wrtbak_tmp"
 		return 1
 	fi
+	wrtbak_status=$(awk '/^HTTP\// { code = $2 } END { print code }' "$wrtbak_headers" 2>/dev/null || true)
+	case "$wrtbak_status" in
+		2??|"")
+			if ! mv -f "$wrtbak_body" "$wrtbak_local_path"; then
+				rm -rf "$wrtbak_tmp"
+				return 1
+			fi
+			rm -rf "$wrtbak_tmp"
+			return 0
+			;;
+		3??)
+			wrtbak_redirect=$(sed -n 's/.*href="\([^"]*\)".*/\1/p' "$wrtbak_body" | sed -n '1p' | sed 's/&amp;/\&/g')
+			if [ -z "$wrtbak_redirect" ]; then
+				wrtbak_redirect=$(awk 'tolower($1) == "location:" { sub(/^[^ ]+[ ]*/, ""); sub(/\r$/, ""); print; exit }' "$wrtbak_headers")
+			fi
+			case "$wrtbak_redirect" in
+				http://*|https://*)
+					if ! curl -fsS -L -o "$wrtbak_body.redirect" "$wrtbak_redirect" >/dev/null; then
+						rm -rf "$wrtbak_tmp"
+						return 1
+					fi
+					if ! mv -f "$wrtbak_body.redirect" "$wrtbak_local_path"; then
+						rm -rf "$wrtbak_tmp"
+						return 1
+					fi
+					rm -rf "$wrtbak_tmp"
+					return 0
+					;;
+			esac
+			;;
+	esac
 	rm -rf "$wrtbak_tmp"
-	return 0
+	return 1
 }
 
 wrtbak_webdav_upload_file() {
