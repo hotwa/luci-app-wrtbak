@@ -14,6 +14,9 @@ cache_sysupgrade="/tmp/wrtbak/restore-cache/sample.sysupgrade.tar.gz"
 cache_service_archive="/tmp/wrtbak/restore-cache/service-sample.wrtbak"
 cache_mismatch_archive="/tmp/wrtbak/restore-cache/mismatch.wrtbak"
 cache_failure_archive="/tmp/wrtbak/restore-cache/write-failure.wrtbak"
+cache_unlisted_archive="/tmp/wrtbak/restore-cache/unlisted.wrtbak"
+cache_prefix_archive="/tmp/wrtbak/restore-cache/file-prefix.wrtbak"
+cache_compact_archive="/tmp/wrtbak/restore-cache/compact.wrtbak"
 cache_unsafe_sysupgrade="/tmp/wrtbak/restore-cache/unsafe.sysupgrade.tar.gz"
 libdir="$repo_dir/root/usr/lib/wrtbak"
 cli="$repo_dir/root/usr/bin/wrtbak"
@@ -176,6 +179,8 @@ run_cli() {
 	PATH="$bin_dir:$PATH" \
 	WRTBAK_ROOT="$fixture_root" \
 	WRTBAK_LIBDIR="$libdir" \
+	WRTBAK_SYSUPGRADE_EXIT="${WRTBAK_SYSUPGRADE_EXIT:-}" \
+	WRTBAK_SYSUPGRADE_LOG="${WRTBAK_SYSUPGRADE_LOG:-}" \
 		"$cli" "$@"
 }
 
@@ -226,7 +231,7 @@ PATH="$bin_dir:$PATH" \
 cp "$source_archive" "$fixture_root$cache_archive"
 cp "$source_sysupgrade" "$fixture_root$cache_sysupgrade"
 
-python3 - "$source_archive" "$fixture_root$cache_service_archive" "$fixture_root$cache_mismatch_archive" "$fixture_root$cache_failure_archive" "$fixture_root$cache_unsafe_sysupgrade" <<'PY'
+python3 - "$source_archive" "$fixture_root$cache_service_archive" "$fixture_root$cache_mismatch_archive" "$fixture_root$cache_failure_archive" "$fixture_root$cache_unlisted_archive" "$fixture_root$cache_prefix_archive" "$fixture_root$cache_compact_archive" "$fixture_root$cache_unsafe_sysupgrade" <<'PY'
 import hashlib
 import io
 import json
@@ -235,7 +240,7 @@ import tarfile
 import time
 import sys
 
-source, service_archive, mismatch_archive, failure_archive, unsafe_sysupgrade = sys.argv[1:]
+source, service_archive, mismatch_archive, failure_archive, unlisted_archive, prefix_archive, compact_archive, unsafe_sysupgrade = sys.argv[1:]
 
 def read_archive(path):
     entries = []
@@ -280,6 +285,23 @@ for member, data in entries:
         data = json.dumps(manifest, indent=2).encode()
     mismatch_entries.append((member, data))
 write_archive(mismatch_archive, mismatch_entries)
+
+unlisted_entries = list(entries)
+extra_info = tarfile.TarInfo("rootfs/etc/config/extra")
+extra_info.mode = 0o644
+extra_info.mtime = int(time.time())
+extra_payload = b"not listed in manifest\n"
+extra_info.size = len(extra_payload)
+unlisted_entries.append((extra_info, extra_payload))
+write_archive(unlisted_archive, unlisted_entries)
+
+compact_entries = []
+for member, data in entries:
+    if member.name == "manifest.json":
+        manifest = json.loads(data.decode())
+        data = json.dumps(manifest, separators=(",", ":")).encode()
+    compact_entries.append((member, data))
+write_archive(compact_archive, compact_entries)
 
 def add_file(archive, name, payload, mode=0o644):
     info = tarfile.TarInfo(name)
@@ -336,6 +358,33 @@ with tarfile.open(failure_archive, "w:gz") as archive:
     add_file(archive, "rootfs/etc/config/system", system_payload)
     add_dir(archive, "rootfs/zzblocked")
     add_file(archive, "rootfs/zzblocked/child", blocked_payload)
+
+prefix_payload = b"should not restore via core-system\n"
+prefix_files = [
+    ("directory", "/etc", "rootfs/etc", "0755", None),
+    ("directory", "/etc/config", "rootfs/etc/config", "0755", None),
+    ("directory", "/etc/config/system", "rootfs/etc/config/system", "0755", None),
+    ("file", "/etc/config/system/child", "rootfs/etc/config/system/child", "0644", prefix_payload),
+]
+prefix_manifest_files = []
+for kind, target, archive_path, mode, payload in prefix_files:
+    row = {"path": target, "archive_path": archive_path, "type": kind, "mode": mode}
+    if payload is not None:
+        row["size"] = len(payload)
+        row["sha256"] = hashlib.sha256(payload).hexdigest()
+    prefix_manifest_files.append(row)
+prefix_manifest = dict(manifest)
+prefix_manifest["profile"] = "file-prefix-spoof"
+prefix_manifest["backup_id"] = "file-prefix-spoof-1"
+prefix_manifest["files"] = prefix_manifest_files
+with tarfile.open(prefix_archive, "w:gz") as archive:
+    add_file(archive, "manifest.json", json.dumps(prefix_manifest, separators=(",", ":")).encode())
+    add_file(archive, "README.txt", b"file prefix spoof fixture\n")
+    add_dir(archive, "rootfs")
+    add_dir(archive, "rootfs/etc")
+    add_dir(archive, "rootfs/etc/config")
+    add_dir(archive, "rootfs/etc/config/system")
+    add_file(archive, "rootfs/etc/config/system/child", prefix_payload)
 
 with tarfile.open(unsafe_sysupgrade, "w:gz") as archive:
     add_file(archive, "../evil", b"unsafe\n")
@@ -623,7 +672,48 @@ assert_reject_code invalid_prebackup restore-sysupgrade --input "$cache_sysupgra
 assert_reject_code invalid_prebackup restore-sysupgrade --input "$cache_sysupgrade" --prebackup /tmp/wrtbak/pre-restore-unrelated.wrtbak --confirm RESTORE --json
 assert_reject_code invalid_prebackup restore-sysupgrade --input "$cache_sysupgrade" --prebackup /tmp/wrtbak/pre-restore-badsha.wrtbak --confirm RESTORE --json
 assert_reject_code archive_mismatch restore-apply --input "$cache_mismatch_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --json
+assert_reject_code archive_mismatch restore-apply --input "$cache_unlisted_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --json
+if [ -e "$fixture_root/etc/config/extra" ]; then
+	echo "restore-apply wrote a file that was not listed in manifest" >&2
+	exit 1
+fi
 assert_reject_code invalid_archive restore-sysupgrade --input "$cache_unsafe_sysupgrade" --prebackup "$prebackup" --confirm RESTORE --execute 0 --json
+
+run_cli restore-apply --input "$cache_prefix_archive" --mode selected --items core-system --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json >"$work_dir/apply-prefix.json"
+python3 - "$work_dir/apply-prefix.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+
+assert data["ok"] is True
+assert data["operation"] == "restore-apply"
+assert data["mode"] == "selected"
+assert data["items"] == "core-system"
+assert data["written_count"] == 0, data
+assert "/etc/config/system" in data["missing_from_archive"], data
+PY
+if [ -e "$fixture_root/etc/config/system/child" ]; then
+	echo "restore-apply treated a file item as a directory prefix" >&2
+	exit 1
+fi
+
+run_cli restore-apply --input "$cache_compact_archive" --mode selected --items core-system --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json >"$work_dir/apply-compact.json"
+python3 - "$work_dir/apply-compact.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+
+assert data["ok"] is True
+assert data["operation"] == "restore-apply"
+assert data["mode"] == "selected"
+assert data["items"] == "core-system"
+assert data["written_count"] == 1, data
+PY
+grep -Fq "source-router" "$fixture_root/etc/config/system"
 
 cat >"$fixture_root/etc/config/system" <<'EOT'
 config system

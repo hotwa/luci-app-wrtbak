@@ -250,8 +250,20 @@ wrtbak_restore_path_matches_item_path() {
 	wrtbak_item_path=$2
 
 	[ "$wrtbak_target" = "$wrtbak_item_path" ] && return 0
+	wrtbak_restore_item_path_is_directory "$wrtbak_item_path" || return 1
 	case "$wrtbak_target" in
 		"$wrtbak_item_path"/*)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+wrtbak_restore_item_path_is_directory() {
+	wrtbak_item_path=$1
+
+	case "$wrtbak_item_path" in
+		/etc/ddns-go|/etc/nikki|/etc/mosdns|/etc/tailscale|/etc/wireguard)
 			return 0
 			;;
 	esac
@@ -741,39 +753,117 @@ wrtbak_restore_manifest_files_table() {
 	wrtbak_manifest=$1
 	wrtbak_output=$2
 	wrtbak_tmp_dir=$3
+	wrtbak_objects="$wrtbak_tmp_dir/manifest-files.objects"
 
 	awk '
-		function json_string(line) {
-			sub(/^[^:]*:[[:space:]]*"/, "", line)
-			sub(/",?[[:space:]]*$/, "", line)
-			return line
+		{
+			json = json $0 "\n"
 		}
-		function json_number(line) {
-			sub(/^[^:]*:[[:space:]]*/, "", line)
-			sub(/,?[[:space:]]*$/, "", line)
-			return line
-		}
-		function emit() {
-			if (archive_path != "") {
-				print archive_path "|" size "|" sha "|" type
+		END {
+			files_pos = index(json, "\"files\"")
+			if (files_pos == 0) {
+				exit 1
 			}
-			archive_path = ""; size = ""; sha = ""; type = ""
+			json = substr(json, files_pos)
+			start = index(json, "[")
+			if (start == 0) {
+				exit 1
+			}
+			in_string = 0
+			escape = 0
+			array_depth = 0
+			object_depth = 0
+			object = ""
+			for (i = start; i <= length(json); i++) {
+				c = substr(json, i, 1)
+				if (escape) {
+					if (object_depth > 0) {
+						object = object c
+					}
+					escape = 0
+					continue
+				}
+				if (c == "\\") {
+					if (object_depth > 0) {
+						object = object c
+					}
+					if (in_string) {
+						escape = 1
+					}
+					continue
+				}
+				if (c == "\"") {
+					in_string = !in_string
+					if (object_depth > 0) {
+						object = object c
+					}
+					continue
+				}
+				if (in_string && object_depth > 0) {
+					object = object c
+					continue
+				}
+				if (!in_string && object_depth > 0) {
+					object = object c
+					if (c == "{") {
+						object_depth++
+					} else if (c == "}") {
+						object_depth--
+						if (object_depth == 0) {
+							gsub(/\n/, " ", object)
+							gsub(/\r/, " ", object)
+							print object
+							object = ""
+						}
+					}
+					continue
+				}
+				if (!in_string) {
+					if (c == "[") {
+						array_depth++
+						continue
+					}
+					if (c == "]") {
+						if (array_depth == 1) {
+							exit 0
+						}
+						array_depth--
+						continue
+					}
+					if (array_depth == 1 && c == "{") {
+						object_depth = 1
+						object = "{"
+						continue
+					}
+				}
+			}
+			exit 1
 		}
-		/"files"[[:space:]]*:[[:space:]]*\[/ { in_files = 1; next }
-		in_files && /^  \]/ { emit(); in_files = 0; next }
-		!in_files { next }
-		/"archive_path"[[:space:]]*:/ { archive_path = json_string($0); next }
-		/"type"[[:space:]]*:/ { type = json_string($0); next }
-		/"size"[[:space:]]*:/ { size = json_number($0); next }
-		/"sha256"[[:space:]]*:/ { sha = json_string($0); next }
-		/^[[:space:]]*}[,]?[[:space:]]*$/ { emit(); next }
-	' "$wrtbak_manifest" > "$wrtbak_output"
+	' "$wrtbak_manifest" > "$wrtbak_objects" || return 1
+
+	: > "$wrtbak_output"
+	while IFS= read -r wrtbak_object || [ -n "$wrtbak_object" ]; do
+		[ -n "$wrtbak_object" ] || continue
+		wrtbak_archive_path=$(printf '%s\n' "$wrtbak_object" | sed -n 's/.*"archive_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+		wrtbak_type=$(printf '%s\n' "$wrtbak_object" | sed -n 's/.*"type"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+		wrtbak_size=$(printf '%s\n' "$wrtbak_object" | sed -n 's/.*"size"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+		wrtbak_sha=$(printf '%s\n' "$wrtbak_object" | sed -n 's/.*"sha256"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+		[ -n "$wrtbak_archive_path" ] || return 1
+		[ -n "$wrtbak_type" ] || return 1
+		printf '%s|%s|%s|%s\n' "$wrtbak_archive_path" "$wrtbak_size" "$wrtbak_sha" "$wrtbak_type" >> "$wrtbak_output"
+	done < "$wrtbak_objects"
+	[ -s "$wrtbak_output" ]
 }
 
 wrtbak_restore_verify_manifest_files() {
 	wrtbak_extract=$1
 	wrtbak_table=$2
 	wrtbak_err=$3
+
+	if [ ! -s "$wrtbak_table" ]; then
+		printf 'manifest files list missing or empty\n' > "$wrtbak_err"
+		return 1
+	fi
 
 	while IFS='|' read -r wrtbak_archive_path wrtbak_size wrtbak_sha wrtbak_type || [ -n "$wrtbak_archive_path" ]; do
 		[ -n "$wrtbak_archive_path" ] || continue
@@ -786,9 +876,6 @@ wrtbak_restore_verify_manifest_files() {
 				;;
 		esac
 		wrtbak_source="$wrtbak_extract/$wrtbak_archive_path"
-		if [ -d "$wrtbak_source" ]; then
-			continue
-		fi
 		case "$wrtbak_type" in
 			directory)
 				[ -d "$wrtbak_source" ] || {
@@ -796,14 +883,15 @@ wrtbak_restore_verify_manifest_files() {
 					return 1
 				}
 				;;
-			file|"")
-				if [ -d "$wrtbak_source" ] && [ -z "$wrtbak_size" ] && [ -z "$wrtbak_sha" ]; then
-					continue
-				fi
+			file)
 				[ -f "$wrtbak_source" ] || {
 					printf 'manifest file missing: %s\n' "$wrtbak_archive_path" > "$wrtbak_err"
 					return 1
 				}
+				if [ -z "$wrtbak_size" ] || [ -z "$wrtbak_sha" ]; then
+					printf 'manifest file missing size or sha256: %s\n' "$wrtbak_archive_path" > "$wrtbak_err"
+					return 1
+				fi
 				if [ -n "$wrtbak_size" ] && [ "$(wrtbak_size_of "$wrtbak_source")" != "$wrtbak_size" ]; then
 					printf 'manifest size mismatch: %s\n' "$wrtbak_archive_path" > "$wrtbak_err"
 					return 1
@@ -821,6 +909,48 @@ wrtbak_restore_verify_manifest_files() {
 	done < "$wrtbak_table"
 }
 
+wrtbak_restore_manifest_has_archive_path() {
+	wrtbak_manifest_table=$1
+	wrtbak_archive_path=$2
+	awk -F'|' -v path="$wrtbak_archive_path" '$1 == path { found = 1 } END { exit found ? 0 : 1 }' "$wrtbak_manifest_table"
+}
+
+wrtbak_restore_manifest_has_child_archive_path() {
+	wrtbak_manifest_table=$1
+	wrtbak_archive_path=$2
+	awk -F'|' -v prefix="$wrtbak_archive_path/" 'index($1, prefix) == 1 { found = 1 } END { exit found ? 0 : 1 }' "$wrtbak_manifest_table"
+}
+
+wrtbak_restore_verify_archive_manifest_allowlist() {
+	wrtbak_archive_table=$1
+	wrtbak_manifest_table=$2
+	wrtbak_err=$3
+	wrtbak_tab=$(printf '\t')
+
+	while IFS="$wrtbak_tab" read -r wrtbak_target wrtbak_type wrtbak_mode wrtbak_size wrtbak_sha wrtbak_archive_path || [ -n "$wrtbak_target" ]; do
+		[ -n "$wrtbak_target" ] || continue
+		case "$wrtbak_type" in
+			file)
+				if ! wrtbak_restore_manifest_has_archive_path "$wrtbak_manifest_table" "$wrtbak_archive_path"; then
+					printf 'archive file not listed in manifest: %s\n' "$wrtbak_archive_path" > "$wrtbak_err"
+					return 1
+				fi
+				;;
+			dir)
+				if ! wrtbak_restore_manifest_has_archive_path "$wrtbak_manifest_table" "$wrtbak_archive_path" &&
+					! wrtbak_restore_manifest_has_child_archive_path "$wrtbak_manifest_table" "$wrtbak_archive_path"; then
+					printf 'archive directory not listed in manifest: %s\n' "$wrtbak_archive_path" > "$wrtbak_err"
+					return 1
+				fi
+				;;
+			*)
+				printf 'archive unsupported entry type: %s\n' "$wrtbak_archive_path" > "$wrtbak_err"
+				return 1
+				;;
+		esac
+	done < "$wrtbak_archive_table"
+}
+
 wrtbak_restore_build_archive_table() {
 	wrtbak_rootfs=$1
 	wrtbak_output=$2
@@ -836,7 +966,7 @@ wrtbak_restore_build_archive_table() {
 		wrtbak_child=${wrtbak_rel#./}
 		wrtbak_source="$wrtbak_rootfs/$wrtbak_child"
 		wrtbak_mode=$(wrtbak_mode_of "$wrtbak_source")
-		printf '/%s%sdir%s%s%s%s%srootfs/%s\n' "$wrtbak_child" "$wrtbak_tab" "$wrtbak_tab" "$wrtbak_mode" "$wrtbak_tab" "$wrtbak_tab" "$wrtbak_tab" "$wrtbak_child" >> "$wrtbak_output"
+		printf '/%s%sdir%s%s%s-%s-%srootfs/%s\n' "$wrtbak_child" "$wrtbak_tab" "$wrtbak_tab" "$wrtbak_mode" "$wrtbak_tab" "$wrtbak_tab" "$wrtbak_tab" "$wrtbak_child" >> "$wrtbak_output"
 	done < "$wrtbak_dirs"
 
 	(cd "$wrtbak_rootfs" && find . -type f -print | sort) > "$wrtbak_files" || return 1
@@ -851,12 +981,34 @@ wrtbak_restore_build_archive_table() {
 	done < "$wrtbak_files"
 }
 
+wrtbak_restore_target_matches_selected_path() {
+	wrtbak_target=$1
+	wrtbak_target_type=$2
+	wrtbak_selected_path=$3
+
+	if wrtbak_restore_item_path_is_directory "$wrtbak_selected_path"; then
+		if [ "$wrtbak_target" = "$wrtbak_selected_path" ]; then
+			[ "$wrtbak_target_type" = "dir" ]
+			return
+		fi
+		case "$wrtbak_target" in
+			"$wrtbak_selected_path"/*)
+				return 0
+				;;
+		esac
+		return 1
+	fi
+
+	[ "$wrtbak_target" = "$wrtbak_selected_path" ] && [ "$wrtbak_target_type" = "file" ]
+}
+
 wrtbak_restore_selected_contains() {
 	wrtbak_target=$1
-	wrtbak_selected_paths=$2
+	wrtbak_target_type=$2
+	wrtbak_selected_paths=$3
 	while IFS= read -r wrtbak_selected_path || [ -n "$wrtbak_selected_path" ]; do
 		[ -n "$wrtbak_selected_path" ] || continue
-		wrtbak_restore_path_matches_item_path "$wrtbak_target" "$wrtbak_selected_path" && return 0
+		wrtbak_restore_target_matches_selected_path "$wrtbak_target" "$wrtbak_target_type" "$wrtbak_selected_path" && return 0
 	done < "$wrtbak_selected_paths"
 	return 1
 }
@@ -867,7 +1019,7 @@ wrtbak_restore_target_in_archive() {
 	wrtbak_tab=$(printf '\t')
 	while IFS="$wrtbak_tab" read -r wrtbak_target wrtbak_type wrtbak_mode wrtbak_size wrtbak_sha wrtbak_archive_path || [ -n "$wrtbak_target" ]; do
 		[ -n "$wrtbak_target" ] || continue
-		wrtbak_restore_path_matches_item_path "$wrtbak_target" "$wrtbak_selected_path" && return 0
+		wrtbak_restore_target_matches_selected_path "$wrtbak_target" "$wrtbak_type" "$wrtbak_selected_path" && return 0
 	done < "$wrtbak_archive_table"
 	return 1
 }
@@ -892,7 +1044,7 @@ wrtbak_restore_filter_apply_table() {
 
 	while IFS="$wrtbak_tab" read -r wrtbak_target wrtbak_type wrtbak_mode_value wrtbak_size wrtbak_sha wrtbak_archive_path || [ -n "$wrtbak_target" ]; do
 		[ -n "$wrtbak_target" ] || continue
-		if wrtbak_restore_selected_contains "$wrtbak_target" "$wrtbak_selected_paths"; then
+		if wrtbak_restore_selected_contains "$wrtbak_target" "$wrtbak_type" "$wrtbak_selected_paths"; then
 			printf '%s%s%s%s%s%s%s%s%s%s%s\n' "$wrtbak_target" "$wrtbak_tab" "$wrtbak_type" "$wrtbak_tab" "$wrtbak_mode_value" "$wrtbak_tab" "$wrtbak_size" "$wrtbak_tab" "$wrtbak_sha" "$wrtbak_tab" "$wrtbak_archive_path" >> "$wrtbak_apply_table"
 		else
 			printf '%s\n' "$wrtbak_target" >> "$wrtbak_skipped"
@@ -1165,7 +1317,11 @@ wrtbak_restore_apply() {
 		return 1
 	fi
 
-	wrtbak_restore_manifest_files_table "$wrtbak_extract/manifest.json" "$wrtbak_manifest_table" "$wrtbak_tmp"
+	if ! wrtbak_restore_manifest_files_table "$wrtbak_extract/manifest.json" "$wrtbak_manifest_table" "$wrtbak_tmp"; then
+		wrtbak_clear_tmp_cleanup
+		wrtbak_restore_invalid_json restore-apply archive_mismatch "restore archive does not match manifest" "manifest files list is invalid"
+		return 1
+	fi
 	if ! wrtbak_restore_verify_manifest_files "$wrtbak_extract" "$wrtbak_manifest_table" "$wrtbak_err"; then
 		wrtbak_detail=$(sed -n '1p' "$wrtbak_err")
 		wrtbak_clear_tmp_cleanup
@@ -1178,6 +1334,12 @@ wrtbak_restore_apply() {
 		wrtbak_restore_invalid_json restore-apply invalid_archive "cannot build restore file list" "$wrtbak_input"
 		return 1
 	}
+	if ! wrtbak_restore_verify_archive_manifest_allowlist "$wrtbak_archive_table" "$wrtbak_manifest_table" "$wrtbak_err"; then
+		wrtbak_detail=$(sed -n '1p' "$wrtbak_err")
+		wrtbak_clear_tmp_cleanup
+		wrtbak_restore_invalid_json restore-apply archive_mismatch "restore archive does not match manifest" "$wrtbak_detail"
+		return 1
+	fi
 	if [ "$wrtbak_apply_mode" = "selected" ]; then
 		wrtbak_write_paths_for_items "$wrtbak_items" "$wrtbak_selected_paths"
 	else
