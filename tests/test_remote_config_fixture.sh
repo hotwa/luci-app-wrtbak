@@ -15,6 +15,7 @@ trap cleanup EXIT HUP INT TERM
 mkdir -p \
 	"$fixture_root/etc/config" \
 	"$fixture_root/etc" \
+	"$fixture_root/tmp/sysinfo" \
 	"$fixture_root/sys/class/net/br-lan" \
 	"$fixture_root/sys/class/net/eth0"
 
@@ -69,6 +70,7 @@ cat >"$fixture_root/etc/board.json" <<'EOT'
 EOT
 
 printf 'fixture-machine-id' >"$fixture_root/etc/machine-id"
+printf 'Test Board Model\n' >"$fixture_root/tmp/sysinfo/board_name"
 printf '02:11:22:33:44:55\n' >"$fixture_root/sys/class/net/br-lan/address"
 printf '00:11:22:33:44:66\n' >"$fixture_root/sys/class/net/eth0/address"
 
@@ -85,13 +87,21 @@ import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     data = json.load(handle)
 
+hash10 = hashlib.sha256(b"021122334455").hexdigest()[:10]
+expected_uid = f"test-board-model-{hash10}"
 hash8 = hashlib.sha256(b"fixture-machine-id").hexdigest()[:8]
 expected_id = f"fixture-router-test-board-model-{hash8}"
 
 assert data["ok"] is True
 assert data["operation"] == "remote-status"
+assert data["uid"] == expected_uid
+assert data["generated_uid"] == expected_uid
 assert data["device_id"] == expected_id
 assert data["generated_device_id"] == expected_id
+assert data["uid_algorithm"] == "wrtbak-board-mac-sha256-10/v1"
+assert data["uid_status"] == "ok"
+assert data["board_slug"] == "test-board-model"
+assert data["mac_source"] == "br-lan"
 assert data["default_target"] == "webdav"
 assert data["targets"]["webdav"]["enabled"] is True
 assert data["targets"]["webdav"]["driver"] == "curl"
@@ -122,7 +132,7 @@ for forbidden in [
 ]:
     assert forbidden not in dump, forbidden
 
-assert re.fullmatch(r"[a-z0-9._-]{1,64}", data["device_id"])
+assert re.fullmatch(r"[a-z0-9._-]{1,64}", data["uid"])
 PY
 
 echo "fixture remote config test passed"

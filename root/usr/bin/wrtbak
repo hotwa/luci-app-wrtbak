@@ -24,6 +24,7 @@ fi
 . "$WRTBAK_LIBDIR/web.sh"
 . "$WRTBAK_LIBDIR/agent.sh"
 . "$WRTBAK_LIBDIR/config.sh"
+. "$WRTBAK_LIBDIR/identity.sh"
 . "$WRTBAK_LIBDIR/remote.sh"
 . "$WRTBAK_LIBDIR/remote_webdav.sh"
 . "$WRTBAK_LIBDIR/remote_s3.sh"
@@ -34,6 +35,7 @@ wrtbak_usage() {
 	cat <<'EOF'
 Usage:
   wrtbak info
+  wrtbak identity --json
   wrtbak status --json
   wrtbak doctor --json
   wrtbak remote-status --json
@@ -701,6 +703,9 @@ case "$wrtbak_command" in
 	info)
 		[ "$#" -eq 0 ] || wrtbak_die "info does not accept arguments"
 		wrtbak_info
+		;;
+	identity)
+		wrtbak_parse_identity "$@"
 		;;
 	status|doctor)
 		wrtbak_parse_agent_json_only "$wrtbak_command" "$@"

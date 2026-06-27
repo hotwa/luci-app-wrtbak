@@ -513,6 +513,7 @@ wrtbak_remote_schedule_status_json() {
 wrtbak_remote_status_json() {
 	wrtbak_stored_device_id=$(wrtbak_main_option device_id "")
 	wrtbak_generated_device_id=$(wrtbak_generated_device_id)
+	wrtbak_identity_load_current || true
 	if [ -n "$wrtbak_stored_device_id" ]; then
 		wrtbak_device_id=$(wrtbak_remote_normalize_name "$wrtbak_stored_device_id")
 	else
@@ -522,6 +523,12 @@ wrtbak_remote_status_json() {
 	printf '{\n'
 	printf '  "ok": true,\n'
 	printf '  "operation": "remote-status",\n'
+	printf '  "uid": '; wrtbak_json_string "$wrtbak_identity_uid"; printf ',\n'
+	printf '  "generated_uid": '; wrtbak_json_string "$wrtbak_identity_uid"; printf ',\n'
+	printf '  "uid_algorithm": '; wrtbak_json_string "$wrtbak_identity_uid_algorithm"; printf ',\n'
+	printf '  "uid_status": '; wrtbak_json_string "$wrtbak_identity_status"; printf ',\n'
+	printf '  "board_slug": '; wrtbak_json_string "$wrtbak_identity_board_slug"; printf ',\n'
+	printf '  "mac_source": '; wrtbak_json_string "$wrtbak_identity_mac_source"; printf ',\n'
 	printf '  "device_id": '; wrtbak_json_string "$wrtbak_device_id"; printf ',\n'
 	printf '  "generated_device_id": '; wrtbak_json_string "$wrtbak_generated_device_id"; printf ',\n'
 	printf '  "default_target": '; wrtbak_json_string "$(wrtbak_main_option default_target webdav)"; printf ',\n'
