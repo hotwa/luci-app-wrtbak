@@ -46,7 +46,7 @@ Usage:
   wrtbak remote-prune --target default|webdav|s3 --max N --json
   wrtbak remote-download --target default|webdav|s3 --path REMOTE_PATH [--legacy-inspect 1] --json
   wrtbak restore-prepare --input LOCAL_ARCHIVE --json
-  wrtbak restore-prebackup --profile pre-restore --items all --format wrtbak --json
+  wrtbak restore-prebackup --profile pre-restore --items all --format wrtbak [--require-remote 0|1] [--target default|webdav|s3] [--source-backup-key KEY] --json
   wrtbak restore-apply --input LOCAL_ARCHIVE --mode all|selected --items IDS|all --prebackup LOCAL_ARCHIVE --confirm RESTORE [--restart-services 0|1] --json
   wrtbak restore-sysupgrade --input LOCAL_ARCHIVE --prebackup LOCAL_ARCHIVE --confirm RESTORE [--execute 0|1] --json
   wrtbak schedule-status --json
@@ -400,6 +400,9 @@ wrtbak_parse_restore_prebackup() {
 	wrtbak_profile=
 	wrtbak_items=
 	wrtbak_format=wrtbak
+	wrtbak_require_remote=${WRTBAK_RESTORE_PREBACKUP_REQUIRE_REMOTE:-0}
+	wrtbak_target=${WRTBAK_RESTORE_PREBACKUP_TARGET:-default}
+	wrtbak_source_backup_key=${WRTBAK_RESTORE_SOURCE_BACKUP_KEY:-}
 
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
@@ -418,6 +421,21 @@ wrtbak_parse_restore_prebackup() {
 				wrtbak_format=$2
 				shift 2
 				;;
+			--require-remote)
+				[ "$#" -ge 2 ] || wrtbak_die "--require-remote requires a value"
+				wrtbak_require_remote=$2
+				shift 2
+				;;
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--source-backup-key)
+				[ "$#" -ge 2 ] || wrtbak_die "--source-backup-key requires a value"
+				wrtbak_source_backup_key=$2
+				shift 2
+				;;
 			--json)
 				shift
 				;;
@@ -433,7 +451,7 @@ wrtbak_parse_restore_prebackup() {
 
 	[ -n "$wrtbak_profile" ] || wrtbak_die "--profile is required"
 	[ -n "$wrtbak_items" ] || wrtbak_die "--items is required"
-	wrtbak_restore_prebackup "$wrtbak_profile" "$wrtbak_items" "$wrtbak_format"
+	wrtbak_restore_prebackup "$wrtbak_profile" "$wrtbak_items" "$wrtbak_format" "$wrtbak_require_remote" "$wrtbak_target" "$wrtbak_source_backup_key"
 }
 
 wrtbak_parse_restore_apply() {

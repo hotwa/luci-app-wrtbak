@@ -14,6 +14,10 @@
 					"read",
 					"stat"
 				],
+				"/tmp/wrtbak/restore-cache/*": [
+					"read",
+					"stat"
+				],
 				"/usr/bin/wrtbak detect --json": [
 					"exec"
 				],

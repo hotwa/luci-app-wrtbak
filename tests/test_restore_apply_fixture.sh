@@ -60,9 +60,12 @@ mkdir -p \
 	"$fixture_root/sys/class/net/br-lan" \
 	"$fixture_root/tmp/wrtbak/restore-cache" \
 	"$fixture_root/tmp/wrtbak/downloads" \
+	"$fixture_root/root/wrtbak/pre-restore" \
+	"$fixture_root/root/wrtbak/receipts" \
 	"$unusable_root/etc/config" \
 	"$unusable_root/tmp/wrtbak/restore-cache" \
-	"$unusable_root/tmp/wrtbak/pre-restore" \
+	"$unusable_root/root/wrtbak/pre-restore" \
+	"$unusable_root/root/wrtbak/receipts" \
 	"$bin_dir"
 
 cat >"$fixture_root/etc/init.d/dnsmasq" <<'EOT'
@@ -751,11 +754,23 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 PY
 )
 
+fresh_prebackup() {
+	fresh_name=$1
+	run_cli restore-prebackup --profile pre-restore --items all --format wrtbak --json >"$work_dir/$fresh_name.json"
+	python3 - "$work_dir/$fresh_name.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle)["path"])
+PY
+}
+
 python3 - "$work_dir/prebackup.json" "$fixture_root" "$before_prebackup" <<'PY'
 import datetime
 import hashlib
 import json
 import os
+import stat
 import sys
 
 path, fixture_root, before_prebackup = sys.argv[1:]
@@ -780,15 +795,27 @@ assert data["operation"] == "restore-prebackup"
 assert data["profile"] == "pre-restore"
 assert data["items"] == "all"
 assert data["format"] == "wrtbak"
-assert data["path"].startswith("/tmp/wrtbak/pre-restore-")
-assert data["path"].endswith(".wrtbak")
-assert data["filename"].startswith("pre-restore-")
+assert data["path"] == data["local_path"]
+assert data["path"].startswith("/root/wrtbak/pre-restore/")
+assert data["path"].endswith(f"-{data['uid']}.wrtbak")
+assert data["filename"] == os.path.basename(data["path"])
 assert data["size"] > 0
 assert len(data["sha256"]) == 64
 assert data["created_at"].endswith("Z")
-assert data["receipt_path"].endswith(".receipt.json")
+assert data["started_at"].endswith("Z")
+assert data["ended_at"].endswith("Z")
+assert data["stage"] == "prebackup_complete"
+assert data["uid"]
+assert data["current_uid"] == data["uid"]
+assert data["current_uid_algorithm"]
+assert data["receipt_path"].startswith("/root/wrtbak/receipts/")
+assert data["receipt_path"].endswith("-restore.json")
 assert os.path.isfile(archive_path)
 assert os.path.isfile(receipt_path)
+assert stat.S_IMODE(os.stat(os.path.dirname(archive_path)).st_mode) == 0o700
+assert stat.S_IMODE(os.stat(os.path.dirname(receipt_path)).st_mode) == 0o700
+assert stat.S_IMODE(os.stat(archive_path).st_mode) == 0o600
+assert stat.S_IMODE(os.stat(receipt_path).st_mode) == 0o600
 
 with open(receipt_path, encoding="utf-8") as handle:
     receipt = json.load(handle)
@@ -797,16 +824,25 @@ assert receipt["operation"] == "restore-prebackup"
 assert receipt["profile"] == data["profile"]
 assert receipt["items"] == data["items"]
 assert receipt["format"] == "wrtbak"
+assert receipt["stage"] == "prebackup_complete"
+assert receipt["current_uid"] == data["uid"]
+assert receipt["current_uid_algorithm"] == data["current_uid_algorithm"]
 assert receipt["path"] == data["path"]
 assert receipt["filename"] == data["filename"]
 assert receipt["size"] == data["size"]
 assert receipt["sha256"] == data["sha256"]
+assert receipt["pre_restore"]["local_path"] == data["path"]
+assert receipt["pre_restore"]["remote_key"] == ""
+assert receipt["pre_restore"]["size"] == data["size"]
+assert receipt["pre_restore"]["sha256"] == data["sha256"]
 assert os.path.getsize(archive_path) == data["size"]
 assert sha256_file(archive_path) == data["sha256"]
 assert receipt["host_device_id"]
 assert receipt["host_device_id"] == data["host_device_id"]
 assert receipt["host_hostname"]
 assert receipt["host_hostname"] == data["host_hostname"]
+assert receipt["started_at"].endswith("Z")
+assert receipt["ended_at"].endswith("Z")
 assert receipt["created_at"].endswith("Z")
 assert parse_utc(receipt["created_at"]) >= parse_utc(before_prebackup) - datetime.timedelta(seconds=1)
 assert receipt["format"] == "wrtbak"
@@ -855,7 +891,7 @@ EOT
 cat >"$fake_prebackup_bin/sha256sum" <<'EOT'
 #!/bin/sh
 case "${1:-}" in
-	*/tmp/wrtbak/pre-restore-*.wrtbak)
+	*/root/wrtbak/pre-restore/*.wrtbak)
 		exit 99
 		;;
 esac
@@ -868,14 +904,25 @@ if PATH="$fake_prebackup_bin:$PATH" run_cli restore-prebackup --profile pre-rest
 	exit 1
 fi
 assert_json_code "$work_dir/prebackup-hash-fail.json" prebackup_failed
-if [ -e "$fixture_root/tmp/wrtbak/pre-restore-20300102T030405Z.wrtbak" ]; then
+if find "$fixture_root/root/wrtbak/pre-restore" -name '20300102T030405Z-*.wrtbak' | grep -q .; then
 	echo "failed prebackup left an orphan archive" >&2
 	exit 1
 fi
 
+if PATH="$bin_dir:$PATH" \
+	WRTBAK_ROOT="$fixture_root" \
+	WRTBAK_LIBDIR="$libdir" \
+	WRTBAK_ALLOW_TEST_HOOKS=1 \
+	WRTBAK_TEST_PERSISTENT_FREE_BYTES=1 \
+		"$cli" restore-prebackup --profile pre-restore --items all --format wrtbak --json >"$work_dir/prebackup-space-fail.json"; then
+	echo "restore-prebackup should fail when persistent target lacks space" >&2
+	exit 1
+fi
+assert_json_code "$work_dir/prebackup-space-fail.json" insufficient_persistent_space
+
 bad_root="$work_dir/bad-root"
-mkdir -p "$bad_root/tmp"
-: > "$bad_root/tmp/wrtbak"
+mkdir -p "$bad_root/root"
+: > "$bad_root/root/wrtbak"
 if PATH="$bin_dir:$PATH" WRTBAK_ROOT="$bad_root" WRTBAK_LIBDIR="$libdir" "$cli" restore-prebackup --profile pre-restore --items all --format wrtbak --json >"$work_dir/prebackup-mkdir-fail.json"; then
 	echo "restore-prebackup should fail when prebackup directory cannot be created" >&2
 	exit 1
@@ -888,7 +935,8 @@ make_prebackup_variant() {
 	host_device_id=$3
 	sha_mode=${4:-actual}
 	cp "$fixture_root$prebackup" "$fixture_root$variant_path"
-	python3 - "$fixture_root$variant_path" "$fixture_root$variant_path.receipt.json" "$variant_path" "$created_at" "$host_device_id" "$sha_mode" <<'PY'
+	variant_receipt="/root/wrtbak/receipts/$(basename -- "$variant_path" .wrtbak)-restore.json"
+	python3 - "$fixture_root$variant_path" "$fixture_root$variant_receipt" "$variant_path" "$created_at" "$host_device_id" "$sha_mode" <<'PY'
 import hashlib
 import json
 import os
@@ -904,13 +952,24 @@ receipt = {
     "profile": "pre-restore",
     "items": "all",
     "format": "wrtbak",
+    "stage": "prebackup_complete",
+    "current_uid": host_device_id,
+    "current_uid_algorithm": "fixture/v1",
     "path": logical_path,
     "filename": os.path.basename(logical_path),
     "size": os.path.getsize(archive),
     "sha256": digest,
     "created_at": created_at,
+    "started_at": created_at,
+    "ended_at": created_at,
     "host_device_id": host_device_id,
     "host_hostname": "fixture",
+    "pre_restore": {
+        "local_path": logical_path,
+        "remote_key": "",
+        "size": os.path.getsize(archive),
+        "sha256": digest,
+    },
 }
 with open(receipt_path, "w", encoding="utf-8") as handle:
     json.dump(receipt, handle)
@@ -921,22 +980,22 @@ current_device=$(python3 - "$work_dir/prebackup.json" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
-    print(json.load(handle)["host_device_id"])
+    print(json.load(handle)["uid"])
 PY
 )
-make_prebackup_variant /tmp/wrtbak/pre-restore-stale.wrtbak 2000-01-01T00:00:00Z "$current_device"
-make_prebackup_variant /tmp/wrtbak/pre-restore-unrelated.wrtbak "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" unrelated-device
-make_prebackup_variant /tmp/wrtbak/pre-restore-badsha.wrtbak "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$current_device" bad
+make_prebackup_variant /root/wrtbak/pre-restore/stale.wrtbak 2000-01-01T00:00:00Z "$current_device"
+make_prebackup_variant /root/wrtbak/pre-restore/unrelated.wrtbak "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" unrelated-device
+make_prebackup_variant /root/wrtbak/pre-restore/badsha.wrtbak "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$current_device" bad
 
 assert_reject_code missing_confirmation restore-apply --input "$cache_archive" --mode all --items all --prebackup "$prebackup" --confirm NOPE --json
-assert_reject_code invalid_prebackup restore-apply --input "$cache_archive" --mode all --items all --prebackup /tmp/wrtbak/pre-restore-missing.wrtbak --confirm RESTORE --json
-assert_reject_code invalid_prebackup restore-apply --input "$cache_archive" --mode all --items all --prebackup /tmp/wrtbak/pre-restore-stale.wrtbak --confirm RESTORE --json
-assert_reject_code invalid_prebackup restore-apply --input "$cache_archive" --mode all --items all --prebackup /tmp/wrtbak/pre-restore-unrelated.wrtbak --confirm RESTORE --json
-assert_reject_code invalid_prebackup restore-apply --input "$cache_archive" --mode all --items all --prebackup /tmp/wrtbak/pre-restore-badsha.wrtbak --confirm RESTORE --json
+assert_reject_code invalid_prebackup restore-apply --input "$cache_archive" --mode all --items all --prebackup /root/wrtbak/pre-restore/missing.wrtbak --confirm RESTORE --json
+assert_reject_code invalid_prebackup restore-apply --input "$cache_archive" --mode all --items all --prebackup /root/wrtbak/pre-restore/stale.wrtbak --confirm RESTORE --json
+assert_reject_code invalid_prebackup restore-apply --input "$cache_archive" --mode all --items all --prebackup /root/wrtbak/pre-restore/unrelated.wrtbak --confirm RESTORE --json
+assert_reject_code invalid_prebackup restore-apply --input "$cache_archive" --mode all --items all --prebackup /root/wrtbak/pre-restore/badsha.wrtbak --confirm RESTORE --json
 assert_reject_code missing_confirmation restore-sysupgrade --input "$cache_sysupgrade" --prebackup "$prebackup" --confirm NOPE --json
-assert_reject_code invalid_prebackup restore-sysupgrade --input "$cache_sysupgrade" --prebackup /tmp/wrtbak/pre-restore-stale.wrtbak --confirm RESTORE --json
-assert_reject_code invalid_prebackup restore-sysupgrade --input "$cache_sysupgrade" --prebackup /tmp/wrtbak/pre-restore-unrelated.wrtbak --confirm RESTORE --json
-assert_reject_code invalid_prebackup restore-sysupgrade --input "$cache_sysupgrade" --prebackup /tmp/wrtbak/pre-restore-badsha.wrtbak --confirm RESTORE --json
+assert_reject_code invalid_prebackup restore-sysupgrade --input "$cache_sysupgrade" --prebackup /root/wrtbak/pre-restore/stale.wrtbak --confirm RESTORE --json
+assert_reject_code invalid_prebackup restore-sysupgrade --input "$cache_sysupgrade" --prebackup /root/wrtbak/pre-restore/unrelated.wrtbak --confirm RESTORE --json
+assert_reject_code invalid_prebackup restore-sysupgrade --input "$cache_sysupgrade" --prebackup /root/wrtbak/pre-restore/badsha.wrtbak --confirm RESTORE --json
 assert_reject_code archive_mismatch restore-apply --input "$cache_mismatch_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --json
 assert_reject_code archive_mismatch restore-apply --input "$cache_unlisted_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --json
 if [ -e "$fixture_root/etc/config/extra" ]; then
@@ -962,9 +1021,18 @@ assert_reject_code missing_device_uid_algorithm restore-apply --input "$cache_mi
 assert_reject_code unsupported_device_uid_algorithm restore-apply --input "$cache_unsupported_algorithm_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json
 cmp "$work_dir/system-before-identity.txt" "$fixture_root/etc/config/system"
 
+cp "$fixture_root/etc/config/system" "$work_dir/system-before-low-space-apply.txt"
+if WRTBAK_ALLOW_TEST_HOOKS=1 WRTBAK_TEST_PERSISTENT_FREE_BYTES=1 run_cli restore-apply --input "$cache_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json >"$work_dir/apply-space-fail.json"; then
+	echo "restore-apply should fail before writing when persistent target lacks space" >&2
+	exit 1
+fi
+assert_json_code "$work_dir/apply-space-fail.json" insufficient_persistent_space
+cmp "$work_dir/system-before-low-space-apply.txt" "$fixture_root/etc/config/system"
+
 cp "$fixture_root$cache_archive" "$unusable_root$cache_archive"
 cp "$fixture_root$prebackup" "$unusable_root$prebackup"
-python3 - "$unusable_root$prebackup" "$unusable_root$prebackup.receipt.json" "$prebackup" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" <<'PY'
+unusable_receipt="/root/wrtbak/receipts/unusable-restore.json"
+python3 - "$unusable_root$prebackup" "$unusable_root$unusable_receipt" "$prebackup" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" <<'PY'
 import hashlib
 import json
 import os
@@ -978,13 +1046,24 @@ receipt = {
     "profile": "pre-restore",
     "items": "all",
     "format": "wrtbak",
+    "stage": "prebackup_complete",
+    "current_uid": "unusable-test-device",
+    "current_uid_algorithm": "fixture/v1",
     "path": logical_path,
     "filename": os.path.basename(logical_path),
     "size": os.path.getsize(archive),
     "sha256": digest,
     "created_at": created_at,
+    "started_at": created_at,
+    "ended_at": created_at,
     "host_device_id": "unusable-test-device",
     "host_hostname": "unusable-router",
+    "pre_restore": {
+        "local_path": logical_path,
+        "remote_key": "",
+        "size": os.path.getsize(archive),
+        "sha256": digest,
+    },
 }
 with open(receipt_path, "w", encoding="utf-8") as handle:
     json.dump(receipt, handle)
@@ -1028,6 +1107,9 @@ assert data["operation"] == "restore-apply"
 assert data["written_count"] >= 2, data
 assert data["skipped_count"] >= 4, data
 PY
+cp "$fixture_root/etc/config/system" "$work_dir/system-before-consumed-prebackup.txt"
+assert_reject_code invalid_prebackup restore-apply --input "$cache_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json
+cmp "$work_dir/system-before-consumed-prebackup.txt" "$fixture_root/etc/config/system"
 grep -Fxq "target passwd" "$fixture_root/etc/passwd"
 grep -Fxq "target shadow" "$fixture_root/etc/shadow"
 grep -Fxq "target group" "$fixture_root/etc/group"
@@ -1037,6 +1119,7 @@ config system
 	option hostname 'target-router'
 EOT
 
+prebackup=$(fresh_prebackup prebackup-before-implicit-dir)
 run_cli restore-apply --input "$cache_implicit_dir_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json >"$work_dir/apply-implicit-dir.json"
 python3 - "$work_dir/apply-implicit-dir.json" "$fixture_root" <<'PY'
 import json
@@ -1060,6 +1143,7 @@ with open(target_file, encoding="utf-8") as handle:
 assert stat.S_IMODE(os.stat(target_dir).st_mode) != 0o777
 PY
 
+prebackup=$(fresh_prebackup prebackup-before-prefix)
 run_cli restore-apply --input "$cache_prefix_archive" --mode selected --items core-system --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json >"$work_dir/apply-prefix.json"
 python3 - "$work_dir/apply-prefix.json" <<'PY'
 import json
@@ -1080,6 +1164,7 @@ if [ -e "$fixture_root/etc/config/system/child" ]; then
 	exit 1
 fi
 
+prebackup=$(fresh_prebackup prebackup-before-compact)
 run_cli restore-apply --input "$cache_compact_archive" --mode selected --items core-system --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json >"$work_dir/apply-compact.json"
 python3 - "$work_dir/apply-compact.json" <<'PY'
 import json
@@ -1105,6 +1190,7 @@ cat >"$fixture_root/etc/config/network" <<'EOT'
 config interface 'lan'
 	option proto 'dhcp'
 EOT
+prebackup=$(fresh_prebackup prebackup-before-selected)
 run_cli restore-apply --input "$cache_archive" --mode selected --items network,wireguard --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json >"$work_dir/apply-selected.json"
 python3 - "$work_dir/apply-selected.json" "$cache_archive" "$prebackup" <<'PY'
 import json
@@ -1130,6 +1216,7 @@ PY
 grep -Fq "before-selected" "$fixture_root/etc/config/system"
 grep -Fq "192.0.2.10" "$fixture_root/etc/config/network"
 
+prebackup=$(fresh_prebackup prebackup-before-apply-all)
 run_cli restore-apply --input "$cache_service_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 1 --json >"$work_dir/apply-all.json"
 python3 - "$work_dir/apply-all.json" "$cache_service_archive" <<'PY'
 import json
@@ -1213,6 +1300,15 @@ assert data == {
 }, data
 PY
 grep -Fq "$fixture_root$cache_sysupgrade" "$work_dir/sysupgrade.log"
+
+run_cli restore-prebackup --profile pre-restore --items all --format wrtbak --json >"$work_dir/prebackup-before-write-failure.json"
+prebackup=$(python3 - "$work_dir/prebackup-before-write-failure.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle)["path"])
+PY
+)
 
 : > "$fixture_root/zzblocked"
 if run_cli restore-apply --input "$cache_failure_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json >"$work_dir/apply-write-failure.json"; then

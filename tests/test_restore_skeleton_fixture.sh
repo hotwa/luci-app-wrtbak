@@ -99,7 +99,11 @@ with open(path, encoding="utf-8") as handle:
 
 assert data["ok"] is True
 assert data["operation"] == "restore-prebackup"
-assert data["path"].startswith("/tmp/wrtbak/pre-restore-")
+assert data["path"] == data["local_path"]
+assert data["path"].startswith("/root/wrtbak/pre-restore/")
+assert data["receipt_path"].startswith("/root/wrtbak/receipts/")
+assert data["stage"] == "prebackup_complete"
+assert data["uid"]
 assert os.path.isfile(fixture_root + data["path"])
 assert os.path.isfile(fixture_root + data["receipt_path"])
 PY

@@ -26,11 +26,15 @@ grep -Fq '"/usr/bin/wrtbak schedule-apply --json"' "$acl_file"
 grep -Fq '"wrtbak"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak create-download *"' "$acl_file"
 ! grep -Fq '"/tmp/wrtbak/*"' "$acl_file"
+! grep -Fq '"/root/*"' "$acl_file"
+! grep -Fq '"/root/wrtbak/*"' "$acl_file"
 grep -Fq '"/tmp/wrtbak/downloads/*.wrtbak"' "$acl_file"
 grep -Fq '"/tmp/wrtbak/downloads/*.sysupgrade.tar.gz"' "$acl_file"
+grep -Fq '"/tmp/wrtbak/restore-cache/*"' "$acl_file"
+! grep -Fq '"/root/wrtbak/pre-restore/*"' "$acl_file"
+! grep -Fq '"/root/wrtbak/receipts/*"' "$acl_file"
 ! grep -Fq '"/tmp/wrtbak/*.wrtbak"' "$acl_file"
 ! grep -Fq '"/tmp/wrtbak/*.sysupgrade.tar.gz"' "$acl_file"
-! grep -Fq '"/tmp/wrtbak/restore-cache/*"' "$acl_file"
 ! grep -Fq '"/tmp/wrtbak/restore-logs/*"' "$acl_file"
 ! grep -Fq '"/tmp/wrtbak/*.remote.json"' "$acl_file"
 ! grep -Fq '"/tmp/wrtbak/*.receipt.json"' "$acl_file"
@@ -65,14 +69,18 @@ for command in [
 for pattern in [
     "/tmp/wrtbak/downloads/*.wrtbak",
     "/tmp/wrtbak/downloads/*.sysupgrade.tar.gz",
+    "/tmp/wrtbak/restore-cache/*",
 ]:
     assert read_file.get(pattern) == ["read", "stat"], pattern
 
 for forbidden in [
     "/tmp/wrtbak/*",
+    "/root/*",
+    "/root/wrtbak/*",
+    "/root/wrtbak/pre-restore/*",
+    "/root/wrtbak/receipts/*",
     "/tmp/wrtbak/*.wrtbak",
     "/tmp/wrtbak/*.sysupgrade.tar.gz",
-    "/tmp/wrtbak/restore-cache/*",
     "/tmp/wrtbak/restore-logs/*",
     "/tmp/wrtbak/*.remote.json",
     "/tmp/wrtbak/*.receipt.json",

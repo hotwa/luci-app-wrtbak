@@ -458,6 +458,7 @@ wrtbak_remote_list_emit_json() {
 	wrtbak_first=1
 	while IFS='	' read -r wrtbak_path wrtbak_filename wrtbak_format wrtbak_size wrtbak_modified wrtbak_legacy || [ -n "$wrtbak_path" ]; do
 		[ -n "$wrtbak_path" ] || continue
+		wrtbak_remote_path_is_pre_restore "$wrtbak_path" && continue
 		if [ "$wrtbak_first" -eq 1 ]; then
 			wrtbak_first=0
 		else
@@ -729,6 +730,18 @@ wrtbak_remote_format_for_path() {
 	esac
 }
 
+wrtbak_remote_path_is_pre_restore() {
+	case "$1" in
+		devices/*/pre-restore/*)
+			return 0
+			;;
+		*/devices/*/pre-restore/*)
+			return 0
+			;;
+	esac
+	return 1
+}
+
 wrtbak_restore_cache_dir() { printf '%s\n' "$(wrtbak_root_path /tmp/wrtbak/restore-cache)"; }
 
 wrtbak_remote_safe_basename() { printf '%s' "$(basename -- "$1")" | tr -c 'A-Za-z0-9._-' '-'; }
@@ -904,6 +917,7 @@ wrtbak_remote_validate_backup_path() {
 	wrtbak_prefix=$(wrtbak_remote_device_prefix "$wrtbak_base") || return 1
 	case "$wrtbak_path" in
 		"$wrtbak_prefix"/*)
+			wrtbak_remote_path_is_pre_restore "$wrtbak_path" && return 1
 			printf '%s\n' "$wrtbak_path"
 			return 0
 			;;
@@ -1239,6 +1253,86 @@ wrtbak_remote_upload_driver() {
 	esac
 }
 
+wrtbak_remote_pre_restore_upload() {
+	wrtbak_pre_target=$(wrtbak_remote_resolve_target "$1") || return 1
+	wrtbak_pre_local_file=$2
+	wrtbak_pre_filename=$3
+	wrtbak_pre_sha=$4
+	wrtbak_pre_size=$5
+	wrtbak_remote_pre_restore_uploaded_key=
+
+	case "$wrtbak_pre_target" in
+		webdav)
+			wrtbak_remote_load_webdav_config || return 1
+			wrtbak_bool_enabled "$wrtbak_remote_webdav_enabled" || return 1
+			command -v curl >/dev/null 2>&1 || return 1
+			wrtbak_pre_driver=curl
+			;;
+		s3)
+			wrtbak_remote_load_s3_config || return 1
+			wrtbak_bool_enabled "$wrtbak_remote_s3_enabled" || return 1
+			command -v rclone >/dev/null 2>&1 || return 1
+			wrtbak_pre_driver=rclone
+			;;
+		*)
+			return 1
+			;;
+	esac
+	wrtbak_identity_current_uid >/dev/null 2>&1 || return 1
+	wrtbak_pre_base=$(wrtbak_remote_target_base "$wrtbak_pre_target") || return 1
+	wrtbak_pre_prefix=$(wrtbak_remote_pre_restore_prefix "$wrtbak_pre_base") || return 1
+	wrtbak_pre_remote_path=$(wrtbak_join_remote_path "$wrtbak_pre_prefix" "$wrtbak_pre_filename") || return 1
+
+	if ! wrtbak_remote_lock_acquire; then
+		return 1
+	fi
+	if ! wrtbak_remote_upload_driver "$wrtbak_pre_target" "$wrtbak_pre_local_file" "$wrtbak_pre_remote_path"; then
+		wrtbak_remote_lock_release
+		return 10
+	fi
+
+	wrtbak_pre_stat=$(mktemp "${TMPDIR:-/tmp}/wrtbak-pre-restore-stat.XXXXXX") || {
+		wrtbak_remote_lock_release
+		return 20
+	}
+	if ! wrtbak_remote_stat_driver "$wrtbak_pre_target" "$wrtbak_pre_remote_path" > "$wrtbak_pre_stat"; then
+		rm -f "$wrtbak_pre_stat"
+		wrtbak_remote_lock_release
+		return 20
+	fi
+	wrtbak_tab=$(printf '\t')
+	wrtbak_pre_remote_size=$(awk -F "$wrtbak_tab" 'NR == 1 { print $1 }' "$wrtbak_pre_stat")
+	rm -f "$wrtbak_pre_stat"
+	if [ "$wrtbak_pre_remote_size" != "$wrtbak_pre_size" ]; then
+		wrtbak_remote_lock_release
+		return 21
+	fi
+
+	wrtbak_pre_verify=$(mktemp "${TMPDIR:-/tmp}/wrtbak-pre-restore-verify.XXXXXX") || {
+		wrtbak_remote_lock_release
+		return 20
+	}
+	if ! wrtbak_remote_download_driver "$wrtbak_pre_target" "$wrtbak_pre_remote_path" "$wrtbak_pre_verify"; then
+		rm -f "$wrtbak_pre_verify"
+		wrtbak_remote_lock_release
+		return 22
+	fi
+	wrtbak_pre_verify_sha=$(wrtbak_sha256_of "$wrtbak_pre_verify" 2>/dev/null || true)
+	rm -f "$wrtbak_pre_verify"
+	if [ -z "$wrtbak_pre_verify_sha" ]; then
+		wrtbak_remote_lock_release
+		return 24
+	fi
+	if [ "$wrtbak_pre_verify_sha" != "$wrtbak_pre_sha" ]; then
+		wrtbak_remote_lock_release
+		return 23
+	fi
+
+	wrtbak_history_append restore-prebackup "$wrtbak_pre_target" true "" "pre-restore upload complete" "$wrtbak_pre_remote_path"
+	wrtbak_remote_lock_release
+	wrtbak_remote_pre_restore_uploaded_key=$wrtbak_pre_remote_path
+}
+
 wrtbak_remote_delete_driver() {
 	wrtbak_delete_driver_target=$1
 	wrtbak_delete_driver_remote_path=$2
@@ -1292,6 +1386,20 @@ wrtbak_remote_prune_unlocked() {
 	: > "$wrtbak_delete_list"
 	wrtbak_remote_list_tsv_unlocked "$wrtbak_target" "$wrtbak_list" || {
 		rm -f "$wrtbak_list" "$wrtbak_delete_list"
+		return 1
+	}
+	wrtbak_filtered_list=$(mktemp "${TMPDIR:-/tmp}/wrtbak-prune-filtered.XXXXXX") || {
+		rm -f "$wrtbak_list" "$wrtbak_delete_list"
+		return 1
+	}
+	while IFS= read -r wrtbak_list_row || [ -n "$wrtbak_list_row" ]; do
+		[ -n "$wrtbak_list_row" ] || continue
+		wrtbak_list_path=${wrtbak_list_row%%	*}
+		wrtbak_remote_path_is_pre_restore "$wrtbak_list_path" && continue
+		printf '%s\n' "$wrtbak_list_row" >> "$wrtbak_filtered_list"
+	done < "$wrtbak_list"
+	mv "$wrtbak_filtered_list" "$wrtbak_list" || {
+		rm -f "$wrtbak_filtered_list" "$wrtbak_list" "$wrtbak_delete_list"
 		return 1
 	}
 	wrtbak_tab=$(printf '\t')

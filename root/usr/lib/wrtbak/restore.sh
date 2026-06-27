@@ -119,7 +119,7 @@ wrtbak_restore_validate_prebackup_path() {
 	wrtbak_prebackup=$2
 
 	case "$wrtbak_prebackup" in
-		/tmp/wrtbak/pre-restore-*.wrtbak)
+		/root/wrtbak/pre-restore/*.wrtbak)
 			;;
 		*)
 			wrtbak_restore_invalid_json "$wrtbak_operation" invalid_prebackup "invalid prebackup path" "$wrtbak_prebackup"
@@ -134,6 +134,34 @@ wrtbak_restore_validate_prebackup_path() {
 
 	wrtbak_actual=$(wrtbak_root_path "$wrtbak_prebackup")
 	wrtbak_restore_validate_regular_file_path "$wrtbak_operation" invalid_prebackup "invalid prebackup path" "$wrtbak_prebackup" "$wrtbak_actual" || return 1
+}
+
+wrtbak_restore_receipts_logical_dir() {
+	printf '%s\n' '/root/wrtbak/receipts'
+}
+
+wrtbak_restore_prebackup_logical_dir() {
+	printf '%s\n' '/root/wrtbak/pre-restore'
+}
+
+wrtbak_restore_receipt_for_prebackup() {
+	wrtbak_lookup_prebackup=$1
+	wrtbak_lookup_dir=$(wrtbak_root_path "$(wrtbak_restore_receipts_logical_dir)")
+	wrtbak_lookup_base=$(wrtbak_restore_receipts_logical_dir)
+
+	for wrtbak_lookup_file in "$wrtbak_lookup_dir"/*-restore.json; do
+		[ -f "$wrtbak_lookup_file" ] || continue
+		[ ! -L "$wrtbak_lookup_file" ] || continue
+		wrtbak_lookup_path=$(wrtbak_restore_receipt_value "$wrtbak_lookup_file" "pre_restore.local_path" "")
+		if [ -z "$wrtbak_lookup_path" ]; then
+			wrtbak_lookup_path=$(wrtbak_restore_receipt_value "$wrtbak_lookup_file" path "")
+		fi
+		if [ "$wrtbak_lookup_path" = "$wrtbak_lookup_prebackup" ]; then
+			printf '%s/%s\n' "$wrtbak_lookup_base" "$(basename -- "$wrtbak_lookup_file")"
+			return 0
+		fi
+	done
+	return 1
 }
 
 wrtbak_restore_receipt_value() {
@@ -152,7 +180,11 @@ wrtbak_restore_validate_receipt() {
 	wrtbak_prebackup=$1
 	wrtbak_restore_validate_prebackup_path "${wrtbak_restore_receipt_operation:-restore-apply}" "$wrtbak_prebackup" || return 1
 
-	wrtbak_receipt_path="$wrtbak_prebackup.receipt.json"
+	wrtbak_receipt_path=$(wrtbak_restore_receipt_for_prebackup "$wrtbak_prebackup" 2>/dev/null || true)
+	if [ -z "$wrtbak_receipt_path" ]; then
+		wrtbak_restore_invalid_json "$wrtbak_restore_receipt_operation" invalid_prebackup "invalid prebackup receipt" "$(wrtbak_restore_receipts_logical_dir)"
+		return 1
+	fi
 	wrtbak_receipt_actual=$(wrtbak_root_path "$wrtbak_receipt_path")
 	if [ ! -f "$wrtbak_receipt_actual" ] || [ -L "$wrtbak_receipt_actual" ]; then
 		wrtbak_restore_invalid_json "$wrtbak_restore_receipt_operation" invalid_prebackup "invalid prebackup receipt" "$wrtbak_receipt_path"
@@ -161,19 +193,45 @@ wrtbak_restore_validate_receipt() {
 
 	wrtbak_receipt_recorded_path=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" path "")
 	wrtbak_receipt_format=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" format "")
-	wrtbak_receipt_size=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" size "")
-	wrtbak_receipt_sha=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" sha256 "")
+	wrtbak_receipt_size=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" "pre_restore.size" "")
+	wrtbak_receipt_sha=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" "pre_restore.sha256" "")
+	wrtbak_receipt_local_path=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" "pre_restore.local_path" "")
+	wrtbak_receipt_stage=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" stage "")
+	wrtbak_receipt_current_uid=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" current_uid "")
+	wrtbak_receipt_current_uid_algorithm=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" current_uid_algorithm "")
+	if [ -z "$wrtbak_receipt_size" ]; then
+		wrtbak_receipt_size=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" size "")
+	fi
+	if [ -z "$wrtbak_receipt_sha" ]; then
+		wrtbak_receipt_sha=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" sha256 "")
+	fi
+	if [ -z "$wrtbak_receipt_local_path" ]; then
+		wrtbak_receipt_local_path=$wrtbak_receipt_recorded_path
+	fi
 	wrtbak_receipt_created=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" created_at "")
 	wrtbak_receipt_device=$(wrtbak_restore_receipt_value "$wrtbak_receipt_actual" host_device_id "")
-	wrtbak_current_device=$(wrtbak_effective_device_id)
+	if wrtbak_identity_load_current; then
+		wrtbak_current_device=$wrtbak_identity_uid
+	else
+		wrtbak_current_device=$(wrtbak_effective_device_id)
+	fi
 	wrtbak_prebackup_actual=$(wrtbak_root_path "$wrtbak_prebackup")
 
-	if [ "$wrtbak_receipt_recorded_path" != "$wrtbak_prebackup" ] || [ "$wrtbak_receipt_format" != "wrtbak" ] || [ -z "$wrtbak_receipt_size" ] || [ -z "$wrtbak_receipt_sha" ] || [ -z "$wrtbak_receipt_created" ]; then
+	case "$wrtbak_receipt_stage" in
+		prebackup_complete|remote_upload_complete)
+			;;
+		*)
+			wrtbak_restore_invalid_json "$wrtbak_restore_receipt_operation" invalid_prebackup "invalid prebackup receipt" "$wrtbak_receipt_path"
+			return 1
+			;;
+	esac
+
+	if [ "$wrtbak_receipt_local_path" != "$wrtbak_prebackup" ] || [ "$wrtbak_receipt_format" != "wrtbak" ] || [ -z "$wrtbak_receipt_size" ] || [ -z "$wrtbak_receipt_sha" ] || [ -z "$wrtbak_receipt_created" ] || [ -z "$wrtbak_receipt_current_uid" ] || [ -z "$wrtbak_receipt_current_uid_algorithm" ]; then
 		wrtbak_restore_invalid_json "$wrtbak_restore_receipt_operation" invalid_prebackup "invalid prebackup receipt" "$wrtbak_receipt_path"
 		return 1
 	fi
 
-	if [ "$wrtbak_receipt_device" != "$wrtbak_current_device" ]; then
+	if [ "$wrtbak_receipt_current_uid" != "$wrtbak_current_device" ]; then
 		wrtbak_restore_invalid_json "$wrtbak_restore_receipt_operation" invalid_prebackup "prebackup belongs to a different device" "$wrtbak_prebackup"
 		return 1
 	fi
@@ -196,6 +254,75 @@ wrtbak_restore_validate_receipt() {
 		wrtbak_restore_invalid_json "$wrtbak_restore_receipt_operation" invalid_prebackup "prebackup receipt is stale" "$wrtbak_prebackup"
 		return 1
 	fi
+	wrtbak_restore_validated_receipt_path=$wrtbak_receipt_path
+}
+
+wrtbak_restore_receipt_lock_dir() {
+	wrtbak_receipt_actual=$1
+	printf '%s/.%s.lock\n' "$(dirname -- "$wrtbak_receipt_actual")" "$(basename -- "$wrtbak_receipt_actual")"
+}
+
+wrtbak_restore_receipt_lock_release() {
+	[ -n "${wrtbak_restore_receipt_claim_lock:-}" ] || return 0
+	rmdir "$wrtbak_restore_receipt_claim_lock" 2>/dev/null || true
+	wrtbak_restore_receipt_claim_lock=
+}
+
+wrtbak_restore_claim_validated_receipt() {
+	[ -n "${wrtbak_restore_validated_receipt_path:-}" ] || return 1
+	wrtbak_claim_receipt=$(wrtbak_root_path "$wrtbak_restore_validated_receipt_path")
+	[ -f "$wrtbak_claim_receipt" ] || return 1
+	wrtbak_restore_receipt_claim_lock=$(wrtbak_restore_receipt_lock_dir "$wrtbak_claim_receipt")
+	if ! mkdir "$wrtbak_restore_receipt_claim_lock" 2>/dev/null; then
+		return 1
+	fi
+
+	wrtbak_claim_stage=$(wrtbak_restore_receipt_value "$wrtbak_claim_receipt" stage "")
+	case "$wrtbak_claim_stage" in
+		prebackup_complete|remote_upload_complete)
+			;;
+		*)
+			wrtbak_restore_receipt_lock_release
+			return 1
+			;;
+	esac
+	if ! wrtbak_restore_update_validated_receipt_stage apply_started; then
+		wrtbak_restore_receipt_lock_release
+		return 1
+	fi
+	wrtbak_restore_receipt_lock_release
+}
+
+wrtbak_restore_update_validated_receipt_stage() {
+	wrtbak_new_stage=$1
+	wrtbak_error_code=${2:-}
+	wrtbak_error_message=${3:-}
+	[ -n "${wrtbak_restore_validated_receipt_path:-}" ] || return 0
+	wrtbak_update_receipt=$(wrtbak_root_path "$wrtbak_restore_validated_receipt_path")
+	[ -f "$wrtbak_update_receipt" ] || return 1
+
+	wrtbak_update_operation=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" operation "restore-prebackup")
+	wrtbak_update_profile=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" profile "pre-restore")
+	wrtbak_update_items=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" items "all")
+	wrtbak_update_format=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" format "wrtbak")
+	wrtbak_update_path=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" "pre_restore.local_path" "")
+	[ -n "$wrtbak_update_path" ] || wrtbak_update_path=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" path "")
+	wrtbak_update_filename=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" filename "$(basename -- "$wrtbak_update_path")")
+	wrtbak_update_size=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" "pre_restore.size" "")
+	[ -n "$wrtbak_update_size" ] || wrtbak_update_size=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" size "0")
+	wrtbak_update_sha=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" "pre_restore.sha256" "")
+	[ -n "$wrtbak_update_sha" ] || wrtbak_update_sha=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" sha256 "")
+	wrtbak_update_created=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" created_at "$(wrtbak_created_at)")
+	wrtbak_update_started=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" started_at "$wrtbak_update_created")
+	wrtbak_update_ended=$(wrtbak_created_at)
+	wrtbak_update_current_uid=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" current_uid "")
+	wrtbak_update_current_uid_algorithm=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" current_uid_algorithm "")
+	wrtbak_update_host_device_id=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" host_device_id "")
+	wrtbak_update_host_hostname=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" host_hostname "")
+	wrtbak_update_remote_key=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" "pre_restore.remote_key" "")
+	wrtbak_update_source_backup_key=$(wrtbak_restore_receipt_value "$wrtbak_update_receipt" source_backup_key "")
+
+	wrtbak_restore_write_receipt_atomic "$wrtbak_update_receipt" "$wrtbak_update_operation" "$wrtbak_update_profile" "$wrtbak_update_items" "$wrtbak_update_format" "$wrtbak_update_path" "$wrtbak_update_filename" "$wrtbak_update_size" "$wrtbak_update_sha" "$wrtbak_update_created" "$wrtbak_update_started" "$wrtbak_update_ended" "$wrtbak_new_stage" "$wrtbak_update_current_uid" "$wrtbak_update_current_uid_algorithm" "$wrtbak_update_host_device_id" "$wrtbak_update_host_hostname" "$wrtbak_update_remote_key" "$wrtbak_update_source_backup_key" "$wrtbak_error_code" "$wrtbak_error_message"
 }
 
 wrtbak_restore_json_file_array() {
@@ -841,95 +968,281 @@ wrtbak_restore_prepare() {
 	esac
 }
 
+wrtbak_restore_prepare_secure_dir() {
+	wrtbak_secure_dir=$1
+	mkdir -p "$wrtbak_secure_dir" 2>/dev/null || return 1
+	[ -d "$wrtbak_secure_dir" ] || return 1
+	[ ! -L "$wrtbak_secure_dir" ] || return 1
+	chmod 700 "$wrtbak_secure_dir" 2>/dev/null || true
+}
+
+wrtbak_restore_estimate_prebackup_size() {
+	wrtbak_total=0
+	wrtbak_paths=$(wrtbak_paths_file)
+	[ -r "$wrtbak_paths" ] || {
+		printf '%s\n' 0
+		return 0
+	}
+
+	while IFS= read -r wrtbak_line || [ -n "$wrtbak_line" ]; do
+		wrtbak_path=$(wrtbak_normalize_path_line "$wrtbak_line" 2>/dev/null) || continue
+		wrtbak_source=$(wrtbak_root_path "$wrtbak_path")
+		if [ -f "$wrtbak_source" ] && [ ! -L "$wrtbak_source" ]; then
+			wrtbak_file_size=$(wrtbak_size_of "$wrtbak_source" 2>/dev/null || printf '0')
+			wrtbak_total=$((wrtbak_total + wrtbak_file_size))
+		elif [ -d "$wrtbak_source" ] && [ ! -L "$wrtbak_source" ]; then
+			wrtbak_dir_size=$(find "$wrtbak_source" -type f -exec stat -c '%s' {} \; 2>/dev/null | awk '{ total += $1 } END { print total + 0 }')
+			wrtbak_total=$((wrtbak_total + wrtbak_dir_size))
+		fi
+	done < "$wrtbak_paths"
+
+	printf '%s\n' "$wrtbak_total"
+}
+
+wrtbak_restore_persistent_free_bytes() {
+	wrtbak_space_dir=$1
+	if [ "${WRTBAK_ALLOW_TEST_HOOKS:-0}" = "1" ] && [ -n "${WRTBAK_TEST_PERSISTENT_FREE_BYTES:-}" ]; then
+		printf '%s\n' "$WRTBAK_TEST_PERSISTENT_FREE_BYTES"
+		return 0
+	fi
+	df -P -k "$wrtbak_space_dir" 2>/dev/null | awk 'NR == 2 { printf "%.0f\n", $4 * 1024 }'
+}
+
+wrtbak_restore_check_persistent_space() {
+	wrtbak_space_dir=$1
+	wrtbak_estimate=$(wrtbak_restore_estimate_prebackup_size)
+	wrtbak_restore_check_space_for_bytes "$wrtbak_space_dir" "$wrtbak_estimate"
+}
+
+wrtbak_restore_check_space_for_bytes() {
+	wrtbak_space_dir=$1
+	wrtbak_estimate=$2
+	case "$wrtbak_estimate" in
+		""|*[!0-9]*)
+			wrtbak_estimate=0
+			;;
+	esac
+	wrtbak_margin=1048576
+	wrtbak_required=$((wrtbak_estimate + wrtbak_margin))
+	wrtbak_free=$(wrtbak_restore_persistent_free_bytes "$wrtbak_space_dir" | sed -n '1p')
+	case "$wrtbak_free" in
+		""|*[!0-9]*)
+			return 1
+			;;
+	esac
+	[ "$wrtbak_free" -ge "$wrtbak_required" ]
+}
+
+wrtbak_restore_apply_required_bytes() {
+	wrtbak_table=$1
+	wrtbak_required=0
+	wrtbak_tab=$(printf '\t')
+
+	while IFS="$wrtbak_tab" read -r wrtbak_target wrtbak_type wrtbak_mode wrtbak_size wrtbak_sha wrtbak_archive_path || [ -n "$wrtbak_target" ]; do
+		[ -n "$wrtbak_target" ] || continue
+		[ "$wrtbak_type" = "file" ] || continue
+		case "$wrtbak_size" in
+			""|*[!0-9]*)
+				wrtbak_size=0
+				;;
+		esac
+		wrtbak_required=$((wrtbak_required + wrtbak_size))
+	done < "$wrtbak_table"
+
+	printf '%s\n' "$wrtbak_required"
+}
+
 wrtbak_restore_receipt_json() {
-	wrtbak_output=$1
-	wrtbak_operation=$2
-	wrtbak_profile=$3
-	wrtbak_items=$4
-	wrtbak_format=$5
-	wrtbak_path=$6
-	wrtbak_filename=$7
-	wrtbak_size=$8
-	wrtbak_sha=$9
-	wrtbak_created=${10}
-	wrtbak_host_device_id=${11}
-	wrtbak_host_hostname=${12}
+	wrtbak_receipt_json_output=$1
+	wrtbak_receipt_json_operation=$2
+	wrtbak_receipt_json_profile=$3
+	wrtbak_receipt_json_items=$4
+	wrtbak_receipt_json_format=$5
+	wrtbak_receipt_json_path=$6
+	wrtbak_receipt_json_filename=$7
+	wrtbak_receipt_json_size=$8
+	wrtbak_receipt_json_sha=$9
+	wrtbak_receipt_json_created=${10}
+	wrtbak_receipt_json_started=${11}
+	wrtbak_receipt_json_ended=${12}
+	wrtbak_receipt_json_stage=${13}
+	wrtbak_receipt_json_current_uid=${14}
+	wrtbak_receipt_json_current_uid_algorithm=${15}
+	wrtbak_receipt_json_host_device_id=${16}
+	wrtbak_receipt_json_host_hostname=${17}
+	wrtbak_receipt_json_remote_key=${18}
+	wrtbak_receipt_json_source_backup_key=${19}
+	wrtbak_receipt_json_error_code=${20:-}
+	wrtbak_receipt_json_error_message=${21:-}
 
 	{
 		printf '{\n'
-		printf '  "operation": '; wrtbak_json_string "$wrtbak_operation"; printf ',\n'
-		printf '  "profile": '; wrtbak_json_string "$wrtbak_profile"; printf ',\n'
-		printf '  "items": '; wrtbak_json_string "$wrtbak_items"; printf ',\n'
-		printf '  "format": '; wrtbak_json_string "$wrtbak_format"; printf ',\n'
-		printf '  "path": '; wrtbak_json_string "$wrtbak_path"; printf ',\n'
-		printf '  "filename": '; wrtbak_json_string "$wrtbak_filename"; printf ',\n'
-		printf '  "size": %s,\n' "$wrtbak_size"
-		printf '  "sha256": '; wrtbak_json_string "$wrtbak_sha"; printf ',\n'
-		printf '  "created_at": '; wrtbak_json_string "$wrtbak_created"; printf ',\n'
-		printf '  "host_device_id": '; wrtbak_json_string "$wrtbak_host_device_id"; printf ',\n'
-		printf '  "host_hostname": '; wrtbak_json_string "$wrtbak_host_hostname"; printf '\n'
+		printf '  "operation": '; wrtbak_json_string "$wrtbak_receipt_json_operation"; printf ',\n'
+		printf '  "profile": '; wrtbak_json_string "$wrtbak_receipt_json_profile"; printf ',\n'
+		printf '  "items": '; wrtbak_json_string "$wrtbak_receipt_json_items"; printf ',\n'
+		printf '  "format": '; wrtbak_json_string "$wrtbak_receipt_json_format"; printf ',\n'
+		printf '  "stage": '; wrtbak_json_string "$wrtbak_receipt_json_stage"; printf ',\n'
+		printf '  "current_uid": '; wrtbak_json_string "$wrtbak_receipt_json_current_uid"; printf ',\n'
+		printf '  "current_uid_algorithm": '; wrtbak_json_string "$wrtbak_receipt_json_current_uid_algorithm"; printf ',\n'
+		printf '  "source_backup_key": '; wrtbak_json_string "$wrtbak_receipt_json_source_backup_key"; printf ',\n'
+		printf '  "path": '; wrtbak_json_string "$wrtbak_receipt_json_path"; printf ',\n'
+		printf '  "filename": '; wrtbak_json_string "$wrtbak_receipt_json_filename"; printf ',\n'
+		printf '  "size": %s,\n' "$wrtbak_receipt_json_size"
+		printf '  "sha256": '; wrtbak_json_string "$wrtbak_receipt_json_sha"; printf ',\n'
+		printf '  "created_at": '; wrtbak_json_string "$wrtbak_receipt_json_created"; printf ',\n'
+		printf '  "started_at": '; wrtbak_json_string "$wrtbak_receipt_json_started"; printf ',\n'
+		printf '  "ended_at": '; wrtbak_json_string "$wrtbak_receipt_json_ended"; printf ',\n'
+		printf '  "host_device_id": '; wrtbak_json_string "$wrtbak_receipt_json_host_device_id"; printf ',\n'
+		printf '  "host_hostname": '; wrtbak_json_string "$wrtbak_receipt_json_host_hostname"; printf ',\n'
+		printf '  "pre_restore": {\n'
+		printf '    "local_path": '; wrtbak_json_string "$wrtbak_receipt_json_path"; printf ',\n'
+		printf '    "remote_key": '; wrtbak_json_string "$wrtbak_receipt_json_remote_key"; printf ',\n'
+		printf '    "sha256": '; wrtbak_json_string "$wrtbak_receipt_json_sha"; printf ',\n'
+		printf '    "size": %s\n' "$wrtbak_receipt_json_size"
+		printf '  }'
+		if [ -n "$wrtbak_receipt_json_error_code" ]; then
+			printf ',\n'
+			printf '  "error_code": '; wrtbak_json_string "$wrtbak_receipt_json_error_code"; printf ',\n'
+			printf '  "error_message": '; wrtbak_json_string "$wrtbak_receipt_json_error_message"; printf '\n'
+		else
+			printf '\n'
+		fi
 		printf '}\n'
-	} > "$wrtbak_output"
+	} > "$wrtbak_receipt_json_output"
+}
+
+wrtbak_restore_write_receipt_atomic() {
+	wrtbak_receipt_actual=$1
+	shift
+	wrtbak_receipt_tmp="$wrtbak_receipt_actual.$$"
+	rm -f "$wrtbak_receipt_tmp" 2>/dev/null || true
+	wrtbak_restore_receipt_json "$wrtbak_receipt_tmp" "$@" || {
+		rm -f "$wrtbak_receipt_tmp"
+		return 1
+	}
+	chmod 600 "$wrtbak_receipt_tmp" 2>/dev/null || true
+	if ! mv "$wrtbak_receipt_tmp" "$wrtbak_receipt_actual"; then
+		rm -f "$wrtbak_receipt_tmp"
+		return 1
+	fi
 }
 
 wrtbak_restore_prebackup() {
 	wrtbak_profile=$1
 	wrtbak_items=$2
 	wrtbak_format=$3
+	wrtbak_require_remote=${4:-0}
+	wrtbak_remote_target=${5:-default}
+	wrtbak_source_backup_key=${6:-}
 
 	if [ "$wrtbak_profile" != "pre-restore" ] || [ "$wrtbak_items" != "all" ] || [ "$wrtbak_format" != "wrtbak" ]; then
 		wrtbak_restore_invalid_json restore-prebackup invalid_prebackup "unsupported prebackup arguments" "$wrtbak_profile:$wrtbak_items:$wrtbak_format"
 		return 1
 	fi
+	case "$wrtbak_require_remote" in
+		0|1)
+			;;
+		*)
+			wrtbak_restore_invalid_json restore-prebackup invalid_prebackup "require-remote must be 0 or 1" "$wrtbak_require_remote"
+			return 1
+			;;
+	esac
 
-	wrtbak_created=$(wrtbak_created_at)
+	wrtbak_started=$(wrtbak_created_at)
+	wrtbak_created=$wrtbak_started
 	wrtbak_stamp=$(wrtbak_compact_timestamp)
-	wrtbak_path="/tmp/wrtbak/pre-restore-$wrtbak_stamp.wrtbak"
+	if ! wrtbak_identity_load_current; then
+		wrtbak_restore_invalid_json restore-prebackup prebackup_failed "current device identity is unusable" "identity_unusable"
+		return 1
+	fi
+	wrtbak_current_uid=$wrtbak_identity_uid
+	wrtbak_current_uid_algorithm=$wrtbak_identity_uid_algorithm
+	wrtbak_prebackup_dir=$(wrtbak_restore_prebackup_logical_dir)
+	wrtbak_receipt_dir=$(wrtbak_restore_receipts_logical_dir)
+	wrtbak_filename="$wrtbak_stamp-$wrtbak_current_uid.wrtbak"
+	wrtbak_path="$wrtbak_prebackup_dir/$wrtbak_filename"
 	wrtbak_actual=$(wrtbak_root_path "$wrtbak_path")
-	wrtbak_filename=$(basename -- "$wrtbak_path")
-	wrtbak_receipt_path="$wrtbak_path.receipt.json"
+	wrtbak_receipt_path="$wrtbak_receipt_dir/$wrtbak_stamp-restore.json"
 	wrtbak_receipt_actual=$(wrtbak_root_path "$wrtbak_receipt_path")
 	wrtbak_err="${TMPDIR:-/tmp}/wrtbak-prebackup-error.$$"
+	wrtbak_remote_key=
 	rm -f "$wrtbak_err"
 
-	if ! mkdir -p "$(dirname -- "$wrtbak_actual")" 2>/dev/null; then
+	if ! wrtbak_restore_prepare_secure_dir "$(dirname -- "$wrtbak_actual")" || ! wrtbak_restore_prepare_secure_dir "$(dirname -- "$wrtbak_receipt_actual")"; then
 		wrtbak_restore_invalid_json restore-prebackup prebackup_failed "failed to create prebackup directory" "$wrtbak_path"
 		return 1
 	fi
+	if ! wrtbak_restore_check_persistent_space "$(dirname -- "$wrtbak_actual")"; then
+		wrtbak_restore_invalid_json restore-prebackup insufficient_persistent_space "insufficient persistent space for pre-restore backup" "$wrtbak_path"
+		return 1
+	fi
+
+	wrtbak_host_device_id=$(wrtbak_effective_device_id)
+	wrtbak_host_hostname=$(wrtbak_hostname)
+	if ! wrtbak_restore_write_receipt_atomic "$wrtbak_receipt_actual" restore-prebackup "$wrtbak_profile" "$wrtbak_items" "$wrtbak_format" "$wrtbak_path" "$wrtbak_filename" 0 "" "$wrtbak_created" "$wrtbak_started" "$wrtbak_started" prebackup_started "$wrtbak_current_uid" "$wrtbak_current_uid_algorithm" "$wrtbak_host_device_id" "$wrtbak_host_hostname" "$wrtbak_remote_key" "$wrtbak_source_backup_key"; then
+		wrtbak_restore_invalid_json restore-prebackup prebackup_failed "failed to write prebackup receipt" "$wrtbak_receipt_path"
+		return 1
+	fi
+
 	if ! wrtbak_created_archive=$(wrtbak_create_archive "$wrtbak_profile" "$wrtbak_actual" "$wrtbak_items" 2>"$wrtbak_err"); then
 		wrtbak_detail=$(sed -n '1p' "$wrtbak_err" 2>/dev/null || true)
 		rm -f "$wrtbak_err"
+		wrtbak_ended=$(wrtbak_created_at)
+		wrtbak_restore_write_receipt_atomic "$wrtbak_receipt_actual" restore-prebackup "$wrtbak_profile" "$wrtbak_items" "$wrtbak_format" "$wrtbak_path" "$wrtbak_filename" 0 "" "$wrtbak_created" "$wrtbak_started" "$wrtbak_ended" failed "$wrtbak_current_uid" "$wrtbak_current_uid_algorithm" "$wrtbak_host_device_id" "$wrtbak_host_hostname" "$wrtbak_remote_key" "$wrtbak_source_backup_key" prebackup_failed "$wrtbak_detail" || true
 		wrtbak_restore_invalid_json restore-prebackup prebackup_failed "failed to create pre-restore backup" "$wrtbak_detail"
 		return 1
 	fi
 	rm -f "$wrtbak_err"
+	chmod 600 "$wrtbak_actual" 2>/dev/null || true
 
 	[ "$wrtbak_created_archive" = "$wrtbak_actual" ] || true
 	wrtbak_size=$(wrtbak_size_of "$wrtbak_actual" 2>/dev/null) || {
 		rm -f "$wrtbak_actual"
+		wrtbak_ended=$(wrtbak_created_at)
+		wrtbak_restore_write_receipt_atomic "$wrtbak_receipt_actual" restore-prebackup "$wrtbak_profile" "$wrtbak_items" "$wrtbak_format" "$wrtbak_path" "$wrtbak_filename" 0 "" "$wrtbak_created" "$wrtbak_started" "$wrtbak_ended" failed "$wrtbak_current_uid" "$wrtbak_current_uid_algorithm" "$wrtbak_host_device_id" "$wrtbak_host_hostname" "$wrtbak_remote_key" "$wrtbak_source_backup_key" prebackup_failed "failed to stat prebackup archive" || true
 		wrtbak_restore_invalid_json restore-prebackup prebackup_failed "failed to stat prebackup archive" "$wrtbak_path"
 		return 1
 	}
 	wrtbak_sha=$(wrtbak_sha256_of "$wrtbak_actual") || {
 		rm -f "$wrtbak_actual"
+		wrtbak_ended=$(wrtbak_created_at)
+		wrtbak_restore_write_receipt_atomic "$wrtbak_receipt_actual" restore-prebackup "$wrtbak_profile" "$wrtbak_items" "$wrtbak_format" "$wrtbak_path" "$wrtbak_filename" "$wrtbak_size" "" "$wrtbak_created" "$wrtbak_started" "$wrtbak_ended" failed "$wrtbak_current_uid" "$wrtbak_current_uid_algorithm" "$wrtbak_host_device_id" "$wrtbak_host_hostname" "$wrtbak_remote_key" "$wrtbak_source_backup_key" prebackup_failed "failed to hash prebackup archive" || true
 		wrtbak_restore_invalid_json restore-prebackup prebackup_failed "failed to hash prebackup archive" "$wrtbak_path"
 		return 1
 	}
-	wrtbak_host_device_id=$(wrtbak_effective_device_id)
-	wrtbak_host_hostname=$(wrtbak_hostname)
-	wrtbak_receipt_tmp="$wrtbak_receipt_actual.$$"
 
-	wrtbak_restore_receipt_json "$wrtbak_receipt_tmp" restore-prebackup "$wrtbak_profile" "$wrtbak_items" "$wrtbak_format" "$wrtbak_path" "$wrtbak_filename" "$wrtbak_size" "$wrtbak_sha" "$wrtbak_created" "$wrtbak_host_device_id" "$wrtbak_host_hostname" || {
-		rm -f "$wrtbak_receipt_tmp" "$wrtbak_actual"
+	wrtbak_ended=$(wrtbak_created_at)
+	if ! wrtbak_restore_write_receipt_atomic "$wrtbak_receipt_actual" restore-prebackup "$wrtbak_profile" "$wrtbak_items" "$wrtbak_format" "$wrtbak_path" "$wrtbak_filename" "$wrtbak_size" "$wrtbak_sha" "$wrtbak_created" "$wrtbak_started" "$wrtbak_ended" prebackup_complete "$wrtbak_current_uid" "$wrtbak_current_uid_algorithm" "$wrtbak_host_device_id" "$wrtbak_host_hostname" "$wrtbak_remote_key" "$wrtbak_source_backup_key"; then
+		rm -f "$wrtbak_actual"
 		wrtbak_restore_invalid_json restore-prebackup prebackup_failed "failed to write prebackup receipt" "$wrtbak_receipt_path"
 		return 1
-	}
-	chmod 600 "$wrtbak_receipt_tmp" 2>/dev/null || true
-	mv "$wrtbak_receipt_tmp" "$wrtbak_receipt_actual" || {
-		rm -f "$wrtbak_receipt_tmp" "$wrtbak_actual"
-		wrtbak_restore_invalid_json restore-prebackup prebackup_failed "failed to write prebackup receipt" "$wrtbak_receipt_path"
-		return 1
-	}
+	fi
+
+	wrtbak_stage=prebackup_complete
+	if [ "$wrtbak_require_remote" = "1" ]; then
+		wrtbak_remote_status=0
+		wrtbak_remote_pre_restore_upload "$wrtbak_remote_target" "$wrtbak_actual" "$wrtbak_filename" "$wrtbak_sha" "$wrtbak_size" || wrtbak_remote_status=$?
+		if [ "$wrtbak_remote_status" -ne 0 ]; then
+			wrtbak_ended=$(wrtbak_created_at)
+			if [ "$wrtbak_remote_status" -ge 20 ]; then
+				wrtbak_remote_code=pre_restore_remote_verify_failed
+				wrtbak_remote_message="pre-restore remote verification failed"
+			else
+				wrtbak_remote_code=pre_restore_remote_upload_failed
+				wrtbak_remote_message="pre-restore remote upload failed"
+			fi
+			wrtbak_restore_write_receipt_atomic "$wrtbak_receipt_actual" restore-prebackup "$wrtbak_profile" "$wrtbak_items" "$wrtbak_format" "$wrtbak_path" "$wrtbak_filename" "$wrtbak_size" "$wrtbak_sha" "$wrtbak_created" "$wrtbak_started" "$wrtbak_ended" failed "$wrtbak_current_uid" "$wrtbak_current_uid_algorithm" "$wrtbak_host_device_id" "$wrtbak_host_hostname" "$wrtbak_remote_key" "$wrtbak_source_backup_key" "$wrtbak_remote_code" "$wrtbak_remote_message" || true
+			wrtbak_restore_invalid_json restore-prebackup "$wrtbak_remote_code" "$wrtbak_remote_message" "$wrtbak_remote_target"
+			return 1
+		fi
+		wrtbak_remote_key=$wrtbak_remote_pre_restore_uploaded_key
+		wrtbak_stage=remote_upload_complete
+		wrtbak_ended=$(wrtbak_created_at)
+		if ! wrtbak_restore_write_receipt_atomic "$wrtbak_receipt_actual" restore-prebackup "$wrtbak_profile" "$wrtbak_items" "$wrtbak_format" "$wrtbak_path" "$wrtbak_filename" "$wrtbak_size" "$wrtbak_sha" "$wrtbak_created" "$wrtbak_started" "$wrtbak_ended" "$wrtbak_stage" "$wrtbak_current_uid" "$wrtbak_current_uid_algorithm" "$wrtbak_host_device_id" "$wrtbak_host_hostname" "$wrtbak_remote_key" "$wrtbak_source_backup_key"; then
+			wrtbak_restore_invalid_json restore-prebackup prebackup_failed "failed to write prebackup receipt" "$wrtbak_receipt_path"
+			return 1
+		fi
+	fi
 
 	printf '{\n'
 	printf '  "ok": true,\n'
@@ -937,12 +1250,20 @@ wrtbak_restore_prebackup() {
 	printf '  "profile": '; wrtbak_json_string "$wrtbak_profile"; printf ',\n'
 	printf '  "items": '; wrtbak_json_string "$wrtbak_items"; printf ',\n'
 	printf '  "format": '; wrtbak_json_string "$wrtbak_format"; printf ',\n'
+	printf '  "stage": '; wrtbak_json_string "$wrtbak_stage"; printf ',\n'
 	printf '  "path": '; wrtbak_json_string "$wrtbak_path"; printf ',\n'
+	printf '  "local_path": '; wrtbak_json_string "$wrtbak_path"; printf ',\n'
 	printf '  "filename": '; wrtbak_json_string "$wrtbak_filename"; printf ',\n'
 	printf '  "size": %s,\n' "$wrtbak_size"
 	printf '  "sha256": '; wrtbak_json_string "$wrtbak_sha"; printf ',\n'
+	printf '  "uid": '; wrtbak_json_string "$wrtbak_current_uid"; printf ',\n'
+	printf '  "current_uid": '; wrtbak_json_string "$wrtbak_current_uid"; printf ',\n'
+	printf '  "current_uid_algorithm": '; wrtbak_json_string "$wrtbak_current_uid_algorithm"; printf ',\n'
 	printf '  "created_at": '; wrtbak_json_string "$wrtbak_created"; printf ',\n'
+	printf '  "started_at": '; wrtbak_json_string "$wrtbak_started"; printf ',\n'
+	printf '  "ended_at": '; wrtbak_json_string "$wrtbak_ended"; printf ',\n'
 	printf '  "receipt_path": '; wrtbak_json_string "$wrtbak_receipt_path"; printf ',\n'
+	printf '  "remote_key": '; wrtbak_json_string "$wrtbak_remote_key"; printf ',\n'
 	printf '  "host_device_id": '; wrtbak_json_string "$wrtbak_host_device_id"; printf ',\n'
 	printf '  "host_hostname": '; wrtbak_json_string "$wrtbak_host_hostname"; printf '\n'
 	printf '}\n'
@@ -1637,6 +1958,17 @@ wrtbak_restore_apply() {
 		: > "$wrtbak_selected_paths"
 	fi
 	wrtbak_restore_filter_apply_table "$wrtbak_apply_mode" "$wrtbak_selected_paths" "$wrtbak_allowed_archive_table" "$wrtbak_apply_table" "$wrtbak_skipped" "$wrtbak_missing"
+	wrtbak_apply_required_bytes=$(wrtbak_restore_apply_required_bytes "$wrtbak_apply_table")
+	if ! wrtbak_restore_check_space_for_bytes "$(wrtbak_root_path /)" "$wrtbak_apply_required_bytes"; then
+		wrtbak_clear_tmp_cleanup
+		wrtbak_restore_invalid_json restore-apply insufficient_persistent_space "insufficient persistent space for restore apply" "$wrtbak_input"
+		return 1
+	fi
+	if ! wrtbak_restore_claim_validated_receipt; then
+		wrtbak_clear_tmp_cleanup
+		wrtbak_restore_invalid_json restore-apply invalid_prebackup "failed to update prebackup receipt" "$wrtbak_prebackup"
+		return 1
+	fi
 
 	wrtbak_log_dir=$(wrtbak_restore_log_dir)
 	mkdir -p "$wrtbak_log_dir" || {
@@ -1659,6 +1991,7 @@ wrtbak_restore_apply() {
 		[ -n "$wrtbak_target" ] || continue
 		if ! wrtbak_restore_write_one "$wrtbak_extract" "$wrtbak_target" "$wrtbak_type" "$wrtbak_entry_mode" "$wrtbak_archive_path" "$wrtbak_log_dir" "$wrtbak_log_actual" "$wrtbak_apply_mode"; then
 			wrtbak_failed_path=$wrtbak_target
+			wrtbak_restore_update_validated_receipt_stage failed write_failed "restore write failed" || true
 			wrtbak_restore_emit_write_failed "$wrtbak_input" "$wrtbak_written_count" "$wrtbak_failed_path" "$wrtbak_log"
 			wrtbak_clear_tmp_cleanup
 			return 1
@@ -1673,6 +2006,7 @@ wrtbak_restore_apply() {
 		wrtbak_reboot=true
 	fi
 	wrtbak_skipped_count=$(wc -l < "$wrtbak_skipped" | awk '{ print $1 }')
+	wrtbak_restore_update_validated_receipt_stage apply_complete || true
 	wrtbak_restore_emit_apply_success "$wrtbak_input" "$wrtbak_apply_mode" "$wrtbak_items" "$wrtbak_written_count" "$wrtbak_skipped_count" "$wrtbak_prebackup" "$wrtbak_log" "$wrtbak_services" "$wrtbak_restarted" "$wrtbak_blocked" "$wrtbak_restart_errors" "$wrtbak_reboot" "$wrtbak_missing"
 	wrtbak_clear_tmp_cleanup
 }
@@ -1755,7 +2089,6 @@ wrtbak_restore_sysupgrade() {
 	set -- $(cat "$wrtbak_tmp/sysupgrade-summary.txt")
 	wrtbak_file_count=$1
 	wrtbak_total_bytes=$2
-
 	if [ "$wrtbak_execute" = "0" ]; then
 		printf '{\n'
 		printf '  "ok": true,\n'
@@ -1787,11 +2120,18 @@ wrtbak_restore_sysupgrade() {
 		return 0
 	fi
 
+	if ! wrtbak_restore_claim_validated_receipt; then
+		wrtbak_clear_tmp_cleanup
+		wrtbak_restore_invalid_json restore-sysupgrade invalid_prebackup "failed to update prebackup receipt" "$wrtbak_prebackup"
+		return 1
+	fi
+
 	set +e
 	sysupgrade -r "$wrtbak_archive"
 	wrtbak_exit=$?
 	set -e
 	if [ "$wrtbak_exit" -eq 0 ]; then
+		wrtbak_restore_update_validated_receipt_stage apply_complete || true
 		printf '{\n'
 		printf '  "ok": true,\n'
 		printf '  "operation": "restore-sysupgrade",\n'
@@ -1805,6 +2145,7 @@ wrtbak_restore_sysupgrade() {
 		wrtbak_clear_tmp_cleanup
 		return 0
 	fi
+	wrtbak_restore_update_validated_receipt_stage failed sysupgrade_failed "sysupgrade restore failed" || true
 	printf '{\n'
 	printf '  "ok": false,\n'
 	printf '  "operation": "restore-sysupgrade",\n'
