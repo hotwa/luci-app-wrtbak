@@ -7,6 +7,7 @@ wrtbak_manifest_write() {
 	wrtbak_backup_id=$4
 	wrtbak_created=$5
 
+	wrtbak_identity_load_current || wrtbak_die "identity_unusable"
 	wrtbak_hostname_value=$(wrtbak_hostname)
 	wrtbak_management_ip_value=$(wrtbak_management_ip)
 	wrtbak_board_model_value=$(wrtbak_board_model)
@@ -28,12 +29,21 @@ wrtbak_manifest_write() {
 		printf '  "created_at": '; wrtbak_json_string "$wrtbak_created"; printf ',\n'
 		printf '  "tool_version": '; wrtbak_json_string "$WRTBAK_VERSION"; printf ',\n'
 		printf '  "device": {\n'
-		printf '    "label": '; wrtbak_json_string "$wrtbak_hostname_value"; printf ',\n'
+		printf '    "uid": '; wrtbak_json_string "$wrtbak_identity_uid"; printf ',\n'
+		printf '    "uid_algorithm": '; wrtbak_json_string "$wrtbak_identity_uid_algorithm"; printf ',\n'
+		printf '    "uid_input": {\n'
+		printf '      "board_slug": '; wrtbak_json_string "$wrtbak_identity_board_slug"; printf ',\n'
+		printf '      "mac_hash": '; wrtbak_json_string "$wrtbak_identity_mac_hash"; printf ',\n'
+		printf '      "mac_source": '; wrtbak_json_string "$wrtbak_identity_mac_source"; printf '\n'
+		printf '    },\n'
+		printf '    "alias": '; wrtbak_json_string "$wrtbak_identity_alias_value"; printf ',\n'
 		printf '    "hostname": '; wrtbak_json_string "$wrtbak_hostname_value"; printf ',\n'
+		printf '    "board_name": '; wrtbak_json_string "$wrtbak_board_name_value"; printf ',\n'
+		printf '    "model": '; wrtbak_json_string "$wrtbak_board_model_value"; printf ',\n'
+		printf '    "label": '; wrtbak_json_string "$wrtbak_hostname_value"; printf ',\n'
 		printf '    "management_ip": '; wrtbak_json_string "$wrtbak_management_ip_value"; printf ',\n'
 		printf '    "market_model": '; wrtbak_json_string "$wrtbak_board_model_value"; printf ',\n'
 		printf '    "board_model": '; wrtbak_json_string "$wrtbak_board_model_value"; printf ',\n'
-		printf '    "board_name": '; wrtbak_json_string "$wrtbak_board_name_value"; printf ',\n'
 		printf '    "target": '; wrtbak_json_string "$wrtbak_target_value"; printf ',\n'
 		printf '    "arch": '; wrtbak_json_string "$wrtbak_arch_value"; printf '\n'
 		printf '  },\n'

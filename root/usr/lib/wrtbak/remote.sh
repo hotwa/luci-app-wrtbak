@@ -240,6 +240,16 @@ wrtbak_remote_error_json() {
 	printf '}\n'
 }
 
+wrtbak_remote_require_identity() {
+	wrtbak_operation=$1
+	wrtbak_target=$2
+	if ! wrtbak_identity_load_current; then
+		wrtbak_remote_error_json "$wrtbak_operation" "$wrtbak_target" identity_unusable "device identity is unusable" ""
+		return 1
+	fi
+	return 0
+}
+
 wrtbak_remote_resolve_target() {
 	wrtbak_target=$1
 	if [ "$wrtbak_target" = "default" ]; then
@@ -1217,6 +1227,7 @@ wrtbak_remote_upload() {
 			wrtbak_upload_driver_name=rclone
 			;;
 	esac
+	wrtbak_remote_require_identity remote-upload "$wrtbak_target" || return 1
 	if ! wrtbak_remote_lock_acquire; then
 		wrtbak_remote_error_json remote-upload "$wrtbak_target" busy "another remote operation is running" ""
 		return 1

@@ -16,7 +16,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-mkdir -p "$source_root/etc/config" "$target_root/etc/config" "$bin_dir"
+mkdir -p "$source_root/etc/config" "$source_root/tmp/sysinfo" "$source_root/sys/class/net/br-lan" "$target_root/etc/config" "$bin_dir"
 
 cat >"$bin_dir/jsonfilter" <<'EOT'
 #!/bin/sh
@@ -93,6 +93,8 @@ config interface 'lan'
 	option proto 'static'
 	option ipaddr '192.0.2.1'
 EOT
+printf 'Restore Plan Board\n' >"$source_root/tmp/sysinfo/board_name"
+printf '02:11:22:33:44:55\n' >"$source_root/sys/class/net/br-lan/address"
 
 cat >"$paths_file" <<'EOT'
 /etc/config/system

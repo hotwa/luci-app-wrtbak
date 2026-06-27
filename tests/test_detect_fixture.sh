@@ -16,11 +16,16 @@ trap cleanup EXIT HUP INT TERM
 
 mkdir -p \
 	"$bin_dir" \
+	"$fixture_root/tmp/sysinfo" \
+	"$fixture_root/sys/class/net/br-lan" \
 	"$fixture_root/etc/config" \
 	"$fixture_root/etc/nikki/profiles" \
 	"$fixture_root/etc/mosdns" \
 	"$fixture_root/etc/wireguard" \
 	"$fixture_root/etc/dropbear"
+
+printf 'Detect Fixture Board\n' >"$fixture_root/tmp/sysinfo/board_name"
+printf '02:11:22:33:44:55\n' >"$fixture_root/sys/class/net/br-lan/address"
 
 cat >"$bin_dir/apk" <<'EOT'
 #!/bin/sh

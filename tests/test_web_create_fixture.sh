@@ -13,7 +13,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-mkdir -p "$fixture_root/etc/config" "$output_dir"
+mkdir -p "$fixture_root/etc/config" "$fixture_root/tmp/sysinfo" "$fixture_root/sys/class/net/br-lan" "$output_dir"
 
 cat >"$fixture_root/etc/config/wrtbak" <<EOT
 config wrtbak 'main'
@@ -25,6 +25,8 @@ cat >"$fixture_root/etc/config/system" <<'EOT'
 config system
 	option hostname 'web-router'
 EOT
+printf 'Web Create Board\n' >"$fixture_root/tmp/sysinfo/board_name"
+printf '02:11:22:33:44:55\n' >"$fixture_root/sys/class/net/br-lan/address"
 
 assert_reject() {
 	if "$@" >"$work_dir/reject.out" 2>"$work_dir/reject.err"; then

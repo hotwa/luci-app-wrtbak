@@ -36,10 +36,12 @@ trap cleanup EXIT HUP INT TERM
 mkdir -p \
 	"$source_root/etc/config" \
 	"$source_root/etc" \
+	"$source_root/tmp/sysinfo" \
 	"$source_root/sys/class/net/br-lan" \
 	"$fixture_root/etc/config" \
 	"$fixture_root/etc/init.d" \
 	"$fixture_root/etc" \
+	"$fixture_root/tmp/sysinfo" \
 	"$fixture_root/sys/class/net/br-lan" \
 	"$fixture_root/tmp/wrtbak/restore-cache" \
 	"$fixture_root/tmp/wrtbak/downloads" \
@@ -150,6 +152,7 @@ cat >"$source_root/etc/board.json" <<'EOT'
 }
 EOT
 printf 'source-machine-id' >"$source_root/etc/machine-id"
+printf 'Source Board\n' >"$source_root/tmp/sysinfo/board_name"
 printf '02:11:22:33:44:55\n' >"$source_root/sys/class/net/br-lan/address"
 
 cat >"$fixture_root/etc/config/wrtbak" <<'EOT'
@@ -171,6 +174,7 @@ cat >"$fixture_root/etc/board.json" <<'EOT'
 }
 EOT
 printf 'target-machine-id' >"$fixture_root/etc/machine-id"
+printf 'Target Board\n' >"$fixture_root/tmp/sysinfo/board_name"
 printf '02:aa:bb:cc:dd:ee\n' >"$fixture_root/sys/class/net/br-lan/address"
 
 cat >"$paths_file" <<'EOT'

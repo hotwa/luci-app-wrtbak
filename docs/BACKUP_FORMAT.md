@@ -56,6 +56,11 @@ Required `device` fields:
 
 | Field | Type | Description |
 | --- | --- | --- |
+| `uid` | string | Stable source device UID derived from board identity and a hashed primary MAC. |
+| `uid_algorithm` | string | UID derivation algorithm, such as `wrtbak-board-mac-sha256-10/v1`. |
+| `uid_input` | object | Non-secret UID derivation inputs. See required `uid_input` fields below. |
+| `alias` | string | User-friendly device alias from wrtbak configuration or hostname fallback. |
+| `model` | string | Source device model string when known. |
 | `label` | string | Human-readable device label. |
 | `hostname` | string | Source device hostname. |
 | `management_ip` | string | Example or source management IP address. Public examples should use documentation ranges, not private deployment details. |
@@ -64,6 +69,16 @@ Required `device` fields:
 | `board_name` | string | OpenWrt board name, such as `xiaomi,ax1800`. |
 | `target` | string | OpenWrt target/subtarget, such as `qualcommax/ipq60xx`. |
 | `arch` | string | OpenWrt package architecture, such as `aarch64_cortex-a53`. |
+
+Required `device.uid_input` fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `board_slug` | string | Slugified board identity used as the UID prefix. |
+| `mac_hash` | string | First 10 hex characters of the SHA-256 digest of the normalized primary MAC. |
+| `mac_source` | string | Source used for the primary MAC, such as `br-lan` or `network.lan.macaddr`. |
+
+Manifest producers MUST NOT serialize the raw primary MAC address in `device`.
 
 Required `firmware` fields:
 

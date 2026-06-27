@@ -17,7 +17,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-mkdir -p "$bin_dir" "$fixture_root/etc/config" "$fixture_root/etc" "$output_dir" "$state_dir"
+mkdir -p "$bin_dir" "$fixture_root/etc/config" "$fixture_root/etc" "$fixture_root/tmp/sysinfo" "$fixture_root/sys/class/net/br-lan" "$output_dir" "$state_dir"
 
 hash8=$(python3 - <<'PY'
 import hashlib
@@ -51,6 +51,8 @@ cat >"$fixture_root/etc/board.json" <<'EOT'
 {"model":{"id":"test-board-id","name":"Test Board Model"}}
 EOT
 printf 'fixture-machine-id' >"$fixture_root/etc/machine-id"
+printf 'Remote WebDAV CLI Board\n' >"$fixture_root/tmp/sysinfo/board_name"
+printf '02:11:22:33:44:55\n' >"$fixture_root/sys/class/net/br-lan/address"
 cat >"$fixture_root/etc/config/network" <<'EOT'
 config interface 'lan'
 	option proto 'static'

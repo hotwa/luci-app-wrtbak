@@ -5,12 +5,21 @@
   "created_at": "2026-06-24T00:00:00Z",
   "tool_version": "0.1.0",
   "device": {
-    "label": "Dorm AX1800",
+    "uid": "xiaomi-ax1800-aa775ce508",
+    "uid_algorithm": "wrtbak-board-mac-sha256-10/v1",
+    "uid_input": {
+      "board_slug": "xiaomi-ax1800",
+      "mac_hash": "aa775ce508",
+      "mac_source": "br-lan"
+    },
+    "alias": "dorm-ax1800",
     "hostname": "dorm-router",
+    "board_name": "xiaomi,ax1800",
+    "model": "Xiaomi AX1800",
+    "label": "Dorm AX1800",
     "management_ip": "192.0.2.20",
     "market_model": "Xiaomi AX1800",
     "board_model": "Xiaomi AX1800",
-    "board_name": "xiaomi,ax1800",
     "target": "qualcommax/ipq60xx",
     "arch": "aarch64_cortex-a53"
   },

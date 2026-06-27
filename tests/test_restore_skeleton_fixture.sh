@@ -12,10 +12,12 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-mkdir -p "$fixture_root/etc/config"
+mkdir -p "$fixture_root/etc/config" "$fixture_root/tmp/sysinfo" "$fixture_root/sys/class/net/br-lan"
 cat >"$fixture_root/etc/config/wrtbak" <<'EOT'
 config wrtbak 'main'
 EOT
+printf 'Restore Skeleton Board\n' >"$fixture_root/tmp/sysinfo/board_name"
+printf '02:11:22:33:44:55\n' >"$fixture_root/sys/class/net/br-lan/address"
 mkdir -p "$fixture_root/tmp/wrtbak/restore-cache" "$fixture_root/tmp/wrtbak"
 printf 'placeholder\n' >"$fixture_root/tmp/wrtbak/restore-cache/sample.wrtbak"
 printf 'placeholder\n' >"$fixture_root/tmp/wrtbak/restore-cache/sample.sysupgrade.tar.gz"
