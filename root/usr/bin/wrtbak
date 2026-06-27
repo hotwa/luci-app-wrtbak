@@ -44,7 +44,7 @@ Usage:
   wrtbak remote-upload --target default|webdav|s3 --profile NAME --items IDS|all --format wrtbak|sysupgrade [--prune-max N] --json
   wrtbak remote-delete --target default|webdav|s3 --path REMOTE_PATH --json
   wrtbak remote-prune --target default|webdav|s3 --max N --json
-  wrtbak remote-download --target default|webdav|s3 --path REMOTE_PATH --json
+  wrtbak remote-download --target default|webdav|s3 --path REMOTE_PATH [--legacy-inspect 1] --json
   wrtbak restore-prepare --input LOCAL_ARCHIVE --json
   wrtbak restore-prebackup --profile pre-restore --items all --format wrtbak --json
   wrtbak restore-apply --input LOCAL_ARCHIVE --mode all|selected --items IDS|all --prebackup LOCAL_ARCHIVE --confirm RESTORE [--restart-services 0|1] --json
@@ -332,6 +332,7 @@ wrtbak_parse_remote_prune() {
 wrtbak_parse_remote_download() {
 	wrtbak_target=
 	wrtbak_path=
+	wrtbak_legacy_inspect=0
 
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
@@ -343,6 +344,11 @@ wrtbak_parse_remote_download() {
 			--path)
 				[ "$#" -ge 2 ] || wrtbak_die "--path requires a value"
 				wrtbak_path=$2
+				shift 2
+				;;
+			--legacy-inspect)
+				[ "$#" -ge 2 ] || wrtbak_die "--legacy-inspect requires a value"
+				wrtbak_legacy_inspect=$2
 				shift 2
 				;;
 			--json)
@@ -360,7 +366,7 @@ wrtbak_parse_remote_download() {
 
 	[ -n "$wrtbak_target" ] || wrtbak_die "--target is required"
 	[ -n "$wrtbak_path" ] || wrtbak_die "--path is required"
-	wrtbak_remote_download "$wrtbak_target" "$wrtbak_path"
+	wrtbak_remote_download "$wrtbak_target" "$wrtbak_path" "$wrtbak_legacy_inspect"
 }
 
 wrtbak_parse_restore_prepare() {

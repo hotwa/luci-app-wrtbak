@@ -26,22 +26,24 @@ mkdir -p "$bin_dir" "$fixture_root/etc/config" "$fixture_root/etc" "$fixture_roo
 : > "$config_log"
 : > "$download_log"
 
-hash8=$(python3 - <<'PY'
-import hashlib
-print(hashlib.sha256(b"fixture-machine-id").hexdigest()[:8])
-PY
-)
-device_id="fixture-router-test-board-model-$hash8"
-webdav_prefix="R2/wrtbak/$device_id"
-s3_prefix="backups/wrtbak/$device_id"
+device_uid="fixture-device-uid-0001"
+device_alias="fixture-router"
+legacy_device_id="old-device-id-0001"
+webdav_prefix="R2/devices/$device_uid"
+s3_prefix="backups/devices/$device_uid"
 webdav_sample="$webdav_prefix/wrtbak/2026/sample.wrtbak"
 s3_sample="$s3_prefix/wrtbak/2026/sample.wrtbak"
+s3_legacy="backups/wrtbak/$device_alias/wrtbak/2026/legacy.wrtbak"
+s3_legacy_device_id="backups/wrtbak/$legacy_device_id/wrtbak/2026/legacy-device-id.wrtbak"
+s3_reserved_alias_other="backups/wrtbak/devices/wrtbak/2026/other-device.wrtbak"
 sample_content="sample-remote-backup-content"
 
 cat >"$fixture_root/etc/config/wrtbak" <<'EOT'
 config wrtbak 'main'
 	option enabled '1'
 	option default_target 'webdav'
+	option device_id 'old-device-id-0001'
+	option device_alias 'fixture-router'
 	option history_file '/overlay/wrtbak/remote-history.jsonl'
 	option history_max_entries '20'
 
@@ -283,6 +285,8 @@ run_cli_with_path() {
 	WRTBAK_FAKE_DOWNLOAD_FAIL="${WRTBAK_FAKE_DOWNLOAD_FAIL:-0}" \
 	WRTBAK_FAKE_DOWNLOAD_REDIRECT="${WRTBAK_FAKE_DOWNLOAD_REDIRECT:-0}" \
 	WRTBAK_FAKE_NO_METADATA="${WRTBAK_FAKE_NO_METADATA:-0}" \
+	WRTBAK_ALLOW_TEST_HOOKS=1 \
+	WRTBAK_FAKE_DEVICE_UID="$device_uid" \
 	PATH="$wrtbak_path_prefix:$PATH" \
 		"$cli" "$@"
 }
@@ -306,6 +310,8 @@ run_cli_with_exact_path() {
 	WRTBAK_FAKE_DOWNLOAD_FAIL="${WRTBAK_FAKE_DOWNLOAD_FAIL:-0}" \
 	WRTBAK_FAKE_DOWNLOAD_REDIRECT="${WRTBAK_FAKE_DOWNLOAD_REDIRECT:-0}" \
 	WRTBAK_FAKE_NO_METADATA="${WRTBAK_FAKE_NO_METADATA:-0}" \
+	WRTBAK_ALLOW_TEST_HOOKS=1 \
+	WRTBAK_FAKE_DEVICE_UID="$device_uid" \
 	PATH="$wrtbak_exact_path" \
 		"$cli" "$@"
 }
@@ -316,6 +322,20 @@ run_cli_without_dependency() {
 	wrtbak_missing_tool_bin="$work_dir/no-$wrtbak_missing_tool-bin"
 	make_fake_path "$wrtbak_missing_tool_bin" "$wrtbak_missing_tool"
 	run_cli_with_exact_path "$wrtbak_missing_tool_bin" "$@"
+}
+
+set_device_alias() {
+	wrtbak_new_alias=$1
+	wrtbak_config_tmp="$work_dir/wrtbak-alias.conf"
+	sed "s/option device_alias '[^']*'/option device_alias '$wrtbak_new_alias'/" "$fixture_root/etc/config/wrtbak" >"$wrtbak_config_tmp"
+	mv "$wrtbak_config_tmp" "$fixture_root/etc/config/wrtbak"
+}
+
+set_device_id() {
+	wrtbak_new_device_id=$1
+	wrtbak_config_tmp="$work_dir/wrtbak-device-id.conf"
+	sed "s/option device_id '[^']*'/option device_id '$wrtbak_new_device_id'/" "$fixture_root/etc/config/wrtbak" >"$wrtbak_config_tmp"
+	mv "$wrtbak_config_tmp" "$fixture_root/etc/config/wrtbak"
 }
 
 run_cli_with_fake_sha256sum() {
@@ -369,6 +389,7 @@ with open(output, encoding="utf-8") as handle:
 
 expected_sha = hashlib.sha256(content.encode()).hexdigest()
 cache_root = pathlib.Path(fixture_root) / "tmp/wrtbak/restore-cache"
+expected_filename = remote_path.rsplit("/", 1)[-1]
 
 assert data["ok"] is True
 assert data["operation"] == "remote-download"
@@ -377,10 +398,10 @@ assert data["driver"] == driver
 assert data["remote_path"] == remote_path
 assert pathlib.Path(data["local_path"]).is_file()
 assert str(data["local_path"]).startswith(str(cache_root) + "/")
-assert pathlib.Path(data["local_path"]).name.endswith("sample.wrtbak")
+assert pathlib.Path(data["local_path"]).name.endswith(expected_filename)
 assert data["sidecar_path"] == data["local_path"] + ".remote.json"
 assert pathlib.Path(data["sidecar_path"]).is_file()
-assert data["filename"] == "sample.wrtbak"
+assert data["filename"] == expected_filename
 assert data["format"] == "wrtbak"
 assert data["size"] == len(content)
 assert data["sha256"] == expected_sha
@@ -411,7 +432,7 @@ for field in [
 assert sidecar["target"] == target
 assert sidecar["driver"] == driver
 assert sidecar["remote_path"] == remote_path
-assert sidecar["filename"] == "sample.wrtbak"
+assert sidecar["filename"] == expected_filename
 assert sidecar["format"] == "wrtbak"
 assert sidecar["size"] == len(content)
 assert sidecar["remote_modified"] == sidecar_modified
@@ -514,6 +535,41 @@ if run_cli remote-download --target webdav --path "R2/wrtbak/other-device/wrtbak
 	exit 1
 fi
 assert_error_code "$work_dir/invalid-prefix.json" invalid_config
+
+if run_cli remote-download --target s3 --path "$s3_legacy" --json >"$work_dir/legacy-default.json"; then
+	echo "remote-download should reject legacy paths by default" >&2
+	exit 1
+fi
+assert_error_code "$work_dir/legacy-default.json" invalid_config
+
+if run_cli remote-download --target s3 --path "$s3_legacy_device_id" --json >"$work_dir/legacy-device-id-default.json"; then
+	echo "remote-download should reject legacy device_id paths by default" >&2
+	exit 1
+fi
+assert_error_code "$work_dir/legacy-device-id-default.json" invalid_config
+
+WRTBAK_FAKE_REMOTE_MODIFIED="2026-06-26T03:30:00Z"
+WRTBAK_FAKE_REMOTE_ETAG=
+run_success "$work_dir/s3-legacy-inspect.json" remote-download --legacy-inspect 1 --target s3 --path "$s3_legacy" --json
+assert_success_json "$work_dir/s3-legacy-inspect.json" s3 rclone "$s3_legacy" "2026-06-26T03:30:00Z" ""
+run_success "$work_dir/s3-legacy-device-id-inspect.json" remote-download --legacy-inspect 1 --target s3 --path "$s3_legacy_device_id" --json
+assert_success_json "$work_dir/s3-legacy-device-id-inspect.json" s3 rclone "$s3_legacy_device_id" "2026-06-26T03:30:00Z" ""
+
+set_device_alias devices
+if run_cli remote-download --legacy-inspect 1 --target s3 --path "$s3_reserved_alias_other" --json >"$work_dir/s3-reserved-alias-legacy.json"; then
+	echo "remote-download should not broaden legacy inspection for reserved alias devices" >&2
+	exit 1
+fi
+assert_error_code "$work_dir/s3-reserved-alias-legacy.json" invalid_config
+set_device_alias "$device_alias"
+
+set_device_id devices
+if run_cli remote-download --legacy-inspect 1 --target s3 --path "$s3_reserved_alias_other" --json >"$work_dir/s3-reserved-device-id-legacy.json"; then
+	echo "remote-download should not broaden legacy inspection for reserved device_id devices" >&2
+	exit 1
+fi
+assert_error_code "$work_dir/s3-reserved-device-id-legacy.json" invalid_config
+set_device_id "$legacy_device_id"
 
 if run_cli remote-download --target unknown --path "$webdav_sample" --json >"$work_dir/unknown-target.json"; then
 	echo "remote-download should fail with unsupported provider for unknown target" >&2

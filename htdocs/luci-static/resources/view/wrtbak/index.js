@@ -213,12 +213,16 @@ function renderBackupRows(table, backups, onDelete, onRestore) {
 	}
 
 	backups.forEach(function(backup) {
-		table.appendChild(E('tr', { 'class': 'tr' }, [
-			E('td', { 'class': 'td' }, E('code', {}, backup.filename || backup.path)),
-			E('td', { 'class': 'td' }, backup.format || '-'),
-			E('td', { 'class': 'td' }, backup.size == null ? '-' : String(backup.size)),
-			E('td', { 'class': 'td' }, backup.modified || '-'),
-			E('td', { 'class': 'td right' }, [
+		var actions;
+
+		if (backup.legacy === true) {
+			actions = [
+				E('span', { 'class': 'cbi-tag wrtbak-legacy-backup' }, _('Legacy')),
+				' ',
+				E('em', {}, _('Restore and delete disabled'))
+			];
+		} else {
+			actions = [
 				E('button', {
 					type: 'button',
 					'class': 'btn cbi-button cbi-button-action',
@@ -230,7 +234,15 @@ function renderBackupRows(table, backups, onDelete, onRestore) {
 					'class': 'btn cbi-button cbi-button-negative',
 					click: function() { onDelete(backup); }
 				}, _('Delete'))
-			])
+			];
+		}
+
+		table.appendChild(E('tr', { 'class': 'tr' }, [
+			E('td', { 'class': 'td' }, E('code', {}, backup.filename || backup.path)),
+			E('td', { 'class': 'td' }, backup.format || '-'),
+			E('td', { 'class': 'td' }, backup.size == null ? '-' : String(backup.size)),
+			E('td', { 'class': 'td' }, backup.modified || '-'),
+			E('td', { 'class': 'td right' }, actions)
 		]));
 	});
 }

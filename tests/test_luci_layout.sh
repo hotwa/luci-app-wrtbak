@@ -117,6 +117,9 @@ grep -Fq "Previous" "$view_file"
 grep -Fq "Next" "$view_file"
 grep -Fq "showDownloadResult" "$view_file"
 grep -Fq "Download" "$view_file"
+grep -Fq "backup.legacy === true" "$view_file"
+grep -Fq "wrtbak-legacy-backup" "$view_file"
+grep -Fq "Restore and delete disabled" "$view_file"
 grep -Fq "handleSaveApply: null" "$view_file"
 grep -Fq "handleSave: null" "$view_file"
 grep -Fq "handleReset: null" "$view_file"
@@ -148,6 +151,21 @@ for snippet in [
     "restoreState.phase = 'idle'",
 ]:
     assert snippet in view, snippet
+
+assert "'--legacy-inspect'" not in view
+
+legacy_marker = "if (backup.legacy === true)"
+else_marker = "} else {"
+assert legacy_marker in view
+legacy_start = view.index(legacy_marker)
+legacy_end = view.index(else_marker, legacy_start)
+legacy_branch = view[legacy_start:legacy_end]
+assert "onDelete" not in legacy_branch
+assert "onRestore" not in legacy_branch
+
+non_legacy_branch = view[legacy_end:view.index("table.appendChild", legacy_end)]
+assert "onDelete(backup)" in non_legacy_branch
+assert "onRestore(backup)" in non_legacy_branch
 PY
 
 echo "LuCI layout test passed"

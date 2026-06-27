@@ -82,7 +82,7 @@ wrtbak_webdav_probe() {
 	wrtbak_username=$2
 	wrtbak_password=$3
 	wrtbak_root_path=$4
-	wrtbak_device_id=$5
+	wrtbak_device_uid=$5
 	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-webdav.XXXXXX") || return 1
 	wrtbak_netrc=$(wrtbak_webdav_make_netrc "$wrtbak_tmp" "$wrtbak_url" "$wrtbak_username" "$wrtbak_password") || {
 		rm -rf "$wrtbak_tmp"
@@ -94,7 +94,7 @@ wrtbak_webdav_probe() {
 		return 1
 	}
 
-	wrtbak_remote_path=$(wrtbak_join_remote_path "$wrtbak_root_path" wrtbak "$wrtbak_device_id" ".probe") || {
+	wrtbak_remote_path=$(wrtbak_join_remote_path "$wrtbak_root_path" devices "$wrtbak_device_uid" ".probe") || {
 		rm -rf "$wrtbak_tmp"
 		return 1
 	}
@@ -127,22 +127,18 @@ wrtbak_webdav_probe() {
 	printf '%s\n' "$wrtbak_remote_path"
 }
 
-wrtbak_webdav_list_raw() {
+wrtbak_webdav_list_prefix_raw() {
 	wrtbak_url=$1
 	wrtbak_username=$2
 	wrtbak_password=$3
-	wrtbak_root_path=$4
-	wrtbak_device_id=$5
+	wrtbak_list_prefix=$4
+	wrtbak_legacy_flag=$5
 	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-webdav-list.XXXXXX") || return 1
 	wrtbak_netrc=$(wrtbak_webdav_make_netrc "$wrtbak_tmp" "$wrtbak_url" "$wrtbak_username" "$wrtbak_password") || {
 		rm -rf "$wrtbak_tmp"
 		return 1
 	}
-	wrtbak_device_prefix=$(wrtbak_join_remote_path "$wrtbak_root_path" wrtbak "$wrtbak_device_id") || {
-		rm -rf "$wrtbak_tmp"
-		return 1
-	}
-	wrtbak_collection_url=$(wrtbak_webdav_url_for_path "$wrtbak_url" "$wrtbak_device_prefix") || {
+	wrtbak_collection_url=$(wrtbak_webdav_url_for_path "$wrtbak_url" "$wrtbak_list_prefix") || {
 		rm -rf "$wrtbak_tmp"
 		return 1
 	}
@@ -161,9 +157,9 @@ wrtbak_webdav_list_raw() {
 			continue
 		fi
 		case "$wrtbak_href" in
-			*"$wrtbak_device_prefix"*)
-				wrtbak_suffix=${wrtbak_href#*"$wrtbak_device_prefix"}
-				wrtbak_remote_path="$wrtbak_device_prefix$wrtbak_suffix"
+			*"$wrtbak_list_prefix"*)
+				wrtbak_suffix=${wrtbak_href#*"$wrtbak_list_prefix"}
+				wrtbak_remote_path="$wrtbak_list_prefix$wrtbak_suffix"
 				;;
 			*)
 				continue
@@ -183,10 +179,30 @@ wrtbak_webdav_list_raw() {
 		wrtbak_filename=${wrtbak_remote_path##*/}
 		wrtbak_size=$(printf '%s\n' "$wrtbak_block" | sed -n 's/.*<[^>]*getcontentlength>\([^<]*\)<\/[^>]*getcontentlength>.*/\1/p')
 		wrtbak_modified=$(printf '%s\n' "$wrtbak_block" | sed -n 's/.*<[^>]*getlastmodified>\([^<]*\)<\/[^>]*getlastmodified>.*/\1/p')
-		printf '%s\t%s\t%s\t%s\t%s\n' "$wrtbak_remote_path" "$wrtbak_filename" "$wrtbak_format" "$wrtbak_size" "$wrtbak_modified"
+		printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$wrtbak_remote_path" "$wrtbak_filename" "$wrtbak_format" "$wrtbak_size" "$wrtbak_modified" "$wrtbak_legacy_flag"
 	done
 
 	rm -rf "$wrtbak_tmp"
+}
+
+wrtbak_webdav_list_raw() {
+	wrtbak_url=$1
+	wrtbak_username=$2
+	wrtbak_password=$3
+	wrtbak_root_path=$4
+	wrtbak_device_uid=$5
+	wrtbak_device_prefix=$(wrtbak_join_remote_path "$wrtbak_root_path" devices "$wrtbak_device_uid") || return 1
+	wrtbak_webdav_list_prefix_raw "$wrtbak_url" "$wrtbak_username" "$wrtbak_password" "$wrtbak_device_prefix" false
+}
+
+wrtbak_webdav_legacy_list_raw() {
+	wrtbak_url=$1
+	wrtbak_username=$2
+	wrtbak_password=$3
+	wrtbak_root_path=$4
+	wrtbak_device_alias=$5
+	wrtbak_legacy_prefix=$(wrtbak_join_remote_path "$wrtbak_root_path" wrtbak "$wrtbak_device_alias") || return 1
+	wrtbak_webdav_list_prefix_raw "$wrtbak_url" "$wrtbak_username" "$wrtbak_password" "$wrtbak_legacy_prefix" true
 }
 
 
