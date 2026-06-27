@@ -5,6 +5,7 @@ repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-restore-apply-test.XXXXXX")
 source_root="$work_dir/source-root"
 fixture_root="$work_dir/fixture-root"
+unusable_root="$work_dir/unusable-root"
 bin_dir="$work_dir/bin"
 paths_file="$work_dir/paths.default"
 source_archive="$work_dir/source.wrtbak"
@@ -21,6 +22,20 @@ cache_prefix_archive="/tmp/wrtbak/restore-cache/file-prefix.wrtbak"
 cache_compact_archive="/tmp/wrtbak/restore-cache/compact.wrtbak"
 cache_bad_service_archive="/tmp/wrtbak/restore-cache/bad-service.wrtbak"
 cache_unsafe_sysupgrade="/tmp/wrtbak/restore-cache/unsafe.sysupgrade.tar.gz"
+cache_identity_mismatch_archive="/tmp/wrtbak/restore-cache/identity-mismatch.wrtbak"
+cache_legacy_archive="/tmp/wrtbak/restore-cache/legacy-no-uid.wrtbak"
+cache_missing_algorithm_archive="/tmp/wrtbak/restore-cache/missing-algorithm.wrtbak"
+cache_unsupported_algorithm_archive="/tmp/wrtbak/restore-cache/unsupported-algorithm.wrtbak"
+cache_account_archive="/tmp/wrtbak/restore-cache/account-files.wrtbak"
+cache_unsupported_schema_archive="/tmp/wrtbak/restore-cache/unsupported-schema.wrtbak"
+cache_unsafe_absolute_archive="/tmp/wrtbak/restore-cache/unsafe-absolute.wrtbak"
+cache_unsafe_dotdot_archive="/tmp/wrtbak/restore-cache/unsafe-dotdot.wrtbak"
+cache_unsafe_symlink_archive="/tmp/wrtbak/restore-cache/unsafe-symlink.wrtbak"
+cache_unsafe_hardlink_archive="/tmp/wrtbak/restore-cache/unsafe-hardlink.wrtbak"
+cache_unsafe_chardev_archive="/tmp/wrtbak/restore-cache/unsafe-chardev.wrtbak"
+cache_unsafe_blockdev_archive="/tmp/wrtbak/restore-cache/unsafe-blockdev.wrtbak"
+cache_unsafe_fifo_archive="/tmp/wrtbak/restore-cache/unsafe-fifo.wrtbak"
+cache_unsafe_socket_archive="/tmp/wrtbak/restore-cache/unsafe-socket.wrtbak"
 libdir="$repo_dir/root/usr/lib/wrtbak"
 cli="$repo_dir/root/usr/bin/wrtbak"
 
@@ -45,6 +60,9 @@ mkdir -p \
 	"$fixture_root/sys/class/net/br-lan" \
 	"$fixture_root/tmp/wrtbak/restore-cache" \
 	"$fixture_root/tmp/wrtbak/downloads" \
+	"$unusable_root/etc/config" \
+	"$unusable_root/tmp/wrtbak/restore-cache" \
+	"$unusable_root/tmp/wrtbak/pre-restore" \
 	"$bin_dir"
 
 cat >"$fixture_root/etc/init.d/dnsmasq" <<'EOT'
@@ -165,6 +183,15 @@ config system
 	option hostname 'target-router'
 EOT
 
+cat >"$unusable_root/etc/config/wrtbak" <<'EOT'
+config wrtbak 'main'
+	option device_id 'unusable-test-device'
+EOT
+cat >"$unusable_root/etc/config/system" <<'EOT'
+config system
+	option hostname 'unusable-router'
+EOT
+
 cat >"$fixture_root/etc/board.json" <<'EOT'
 {
   "model": {
@@ -174,8 +201,8 @@ cat >"$fixture_root/etc/board.json" <<'EOT'
 }
 EOT
 printf 'target-machine-id' >"$fixture_root/etc/machine-id"
-printf 'Target Board\n' >"$fixture_root/tmp/sysinfo/board_name"
-printf '02:aa:bb:cc:dd:ee\n' >"$fixture_root/sys/class/net/br-lan/address"
+printf 'Source Board\n' >"$fixture_root/tmp/sysinfo/board_name"
+printf '02:11:22:33:44:55\n' >"$fixture_root/sys/class/net/br-lan/address"
 
 cat >"$paths_file" <<'EOT'
 /etc/config/system
@@ -191,6 +218,13 @@ run_cli() {
 		"$cli" "$@"
 }
 
+run_cli_unusable() {
+	PATH="$bin_dir:$PATH" \
+	WRTBAK_ROOT="$unusable_root" \
+	WRTBAK_LIBDIR="$libdir" \
+		"$cli" "$@"
+}
+
 assert_reject_code() {
 	expected_code=$1
 	shift
@@ -198,6 +232,22 @@ assert_reject_code() {
 	err_file="$work_dir/reject.err"
 
 	if run_cli "$@" >"$output_file" 2>"$err_file"; then
+		echo "expected command to fail: $*" >&2
+		cat "$output_file" >&2
+		cat "$err_file" >&2
+		exit 1
+	fi
+
+	assert_json_code "$output_file" "$expected_code"
+}
+
+assert_reject_code_unusable() {
+	expected_code=$1
+	shift
+	output_file="$work_dir/reject-unusable.json"
+	err_file="$work_dir/reject-unusable.err"
+
+	if run_cli_unusable "$@" >"$output_file" 2>"$err_file"; then
 		echo "expected command to fail: $*" >&2
 		cat "$output_file" >&2
 		cat "$err_file" >&2
@@ -238,7 +288,7 @@ PATH="$bin_dir:$PATH" \
 cp "$source_archive" "$fixture_root$cache_archive"
 cp "$source_sysupgrade" "$fixture_root$cache_sysupgrade"
 
-python3 - "$source_archive" "$fixture_root$cache_service_archive" "$fixture_root$cache_mismatch_archive" "$fixture_root$cache_failure_archive" "$fixture_root$cache_unlisted_archive" "$fixture_root$cache_nested_files_archive" "$fixture_root$cache_implicit_dir_archive" "$fixture_root$cache_prefix_archive" "$fixture_root$cache_compact_archive" "$fixture_root$cache_bad_service_archive" "$fixture_root$cache_unsafe_sysupgrade" <<'PY'
+python3 - "$source_archive" "$fixture_root$cache_service_archive" "$fixture_root$cache_mismatch_archive" "$fixture_root$cache_failure_archive" "$fixture_root$cache_unlisted_archive" "$fixture_root$cache_nested_files_archive" "$fixture_root$cache_implicit_dir_archive" "$fixture_root$cache_prefix_archive" "$fixture_root$cache_compact_archive" "$fixture_root$cache_bad_service_archive" "$fixture_root$cache_unsafe_sysupgrade" "$fixture_root$cache_identity_mismatch_archive" "$fixture_root$cache_legacy_archive" "$fixture_root$cache_missing_algorithm_archive" "$fixture_root$cache_unsupported_algorithm_archive" "$fixture_root$cache_account_archive" "$fixture_root$cache_unsupported_schema_archive" "$fixture_root$cache_unsafe_absolute_archive" "$fixture_root$cache_unsafe_dotdot_archive" "$fixture_root$cache_unsafe_symlink_archive" "$fixture_root$cache_unsafe_hardlink_archive" "$fixture_root$cache_unsafe_chardev_archive" "$fixture_root$cache_unsafe_blockdev_archive" "$fixture_root$cache_unsafe_fifo_archive" "$fixture_root$cache_unsafe_socket_archive" <<'PY'
 import hashlib
 import io
 import json
@@ -247,7 +297,33 @@ import tarfile
 import time
 import sys
 
-source, service_archive, mismatch_archive, failure_archive, unlisted_archive, nested_files_archive, implicit_dir_archive, prefix_archive, compact_archive, bad_service_archive, unsafe_sysupgrade = sys.argv[1:]
+(
+    source,
+    service_archive,
+    mismatch_archive,
+    failure_archive,
+    unlisted_archive,
+    nested_files_archive,
+    implicit_dir_archive,
+    prefix_archive,
+    compact_archive,
+    bad_service_archive,
+    unsafe_sysupgrade,
+    identity_mismatch_archive,
+    legacy_archive,
+    missing_algorithm_archive,
+    unsupported_algorithm_archive,
+    account_archive,
+    unsupported_schema_archive,
+    unsafe_absolute_archive,
+    unsafe_dotdot_archive,
+    unsafe_symlink_archive,
+    unsafe_hardlink_archive,
+    unsafe_chardev_archive,
+    unsafe_blockdev_archive,
+    unsafe_fifo_archive,
+    unsafe_socket_archive,
+) = sys.argv[1:]
 
 def read_archive(path):
     entries = []
@@ -272,6 +348,13 @@ def write_archive(path, entries):
                 archive.addfile(info, io.BytesIO(payload))
 
 entries = read_archive(source)
+source_manifest_data = None
+for member, data in entries:
+    if member.name == "manifest.json":
+        source_manifest_data = json.loads(data.decode())
+        break
+assert source_manifest_data is not None
+source_device_identity = dict(source_manifest_data.get("device", {}))
 
 service_entries = []
 for member, data in entries:
@@ -365,7 +448,7 @@ manifest = {
     "backup_id": "write-failure-1",
     "created_at": "2026-06-26T00:00:00Z",
     "tool_version": "0.1.0",
-    "device": {"hostname": "fixture", "board_model": "fixture"},
+    "device": dict(source_device_identity, hostname="fixture", board_model="fixture"),
     "firmware": {"distribution": "OpenWrt", "version": "test"},
     "restore": {
         "default_mode": "review-required",
@@ -457,6 +540,117 @@ with tarfile.open(bad_service_archive, "w:gz") as archive:
     add_dir(archive, "rootfs")
     add_dir(archive, "rootfs/tmp")
     add_file(archive, "rootfs/tmp/pwnsvc", bad_service_payload, mode=0o755)
+
+def mutate_manifest(dest, mutate):
+    mutated = []
+    for member, data in entries:
+        if member.name == "manifest.json":
+            manifest = json.loads(data.decode())
+            mutate(manifest)
+            data = json.dumps(manifest, indent=2).encode()
+        mutated.append((member, data))
+    write_archive(dest, mutated)
+
+def set_identity_mismatch(manifest):
+    device = manifest.setdefault("device", {})
+    device["uid"] = "different-device-uid"
+    device["alias"] = "target-router"
+
+def remove_uid(manifest):
+    manifest.setdefault("device", {}).pop("uid", None)
+
+def remove_algorithm(manifest):
+    manifest.setdefault("device", {}).pop("uid_algorithm", None)
+
+def set_unsupported_algorithm(manifest):
+    manifest.setdefault("device", {})["uid_algorithm"] = "future-uid-algorithm/v99"
+
+def set_unsupported_schema(manifest):
+    manifest["schema"] = "wrtbak/v99"
+
+mutate_manifest(identity_mismatch_archive, set_identity_mismatch)
+mutate_manifest(legacy_archive, remove_uid)
+mutate_manifest(missing_algorithm_archive, remove_algorithm)
+mutate_manifest(unsupported_algorithm_archive, set_unsupported_algorithm)
+mutate_manifest(unsupported_schema_archive, set_unsupported_schema)
+
+account_payloads = {
+    "/etc/passwd": b"root:x:0:0:archive root:/root:/bin/ash\n",
+    "/etc/shadow": b"root:$1$archive:19000:0:99999:7:::\n",
+    "/etc/group": b"root:x:0:\n",
+    "/etc/gshadow": b"root:*::\n",
+}
+account_entries = []
+for member, data in entries:
+    if member.name == "manifest.json":
+        manifest = json.loads(data.decode())
+        files = manifest.setdefault("files", [])
+        for target, payload in account_payloads.items():
+            archive_path = "rootfs" + target
+            files.append({
+                "path": target,
+                "archive_path": archive_path,
+                "type": "file",
+                "mode": "0600",
+                "size": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            })
+        data = json.dumps(manifest, indent=2).encode()
+    account_entries.append((member, data))
+
+with tarfile.open(account_archive, "w:gz") as archive:
+    for old, data in account_entries:
+        info = tarfile.TarInfo(old.name)
+        info.mtime = int(time.time())
+        info.mode = old.mode
+        info.type = old.type
+        if old.isdir():
+            archive.addfile(info)
+        else:
+            payload = data or b""
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+    for target, payload in account_payloads.items():
+        add_file(archive, "rootfs" + target, payload, mode=0o600)
+
+source_manifest = None
+for member, data in entries:
+    if member.name == "manifest.json":
+        source_manifest = data
+        break
+assert source_manifest is not None
+
+def write_unsafe_archive(path, member_name, member_type=None):
+    with tarfile.open(path, "w:gz") as archive:
+        add_file(archive, "manifest.json", source_manifest)
+        add_file(archive, "README.txt", b"unsafe fixture\n")
+        add_dir(archive, "rootfs")
+        info = tarfile.TarInfo(member_name)
+        info.mtime = int(time.time())
+        info.mode = 0o644
+        if member_type is None:
+            payload = b"unsafe\n"
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+            return
+        info.type = member_type
+        if member_type == tarfile.SYMTYPE:
+            info.linkname = "/etc/passwd"
+        elif member_type == tarfile.LNKTYPE:
+            info.linkname = "rootfs/etc/config/system"
+        elif member_type in (tarfile.CHRTYPE, tarfile.BLKTYPE):
+            info.devmajor = 1
+            info.devminor = 3
+        archive.addfile(info)
+
+write_unsafe_archive(unsafe_absolute_archive, "/absolute")
+write_unsafe_archive(unsafe_dotdot_archive, "rootfs/../evil")
+write_unsafe_archive(unsafe_symlink_archive, "rootfs/etc/config/unsafe-link", tarfile.SYMTYPE)
+write_unsafe_archive(unsafe_hardlink_archive, "rootfs/etc/config/unsafe-hardlink", tarfile.LNKTYPE)
+write_unsafe_archive(unsafe_chardev_archive, "rootfs/etc/config/unsafe-char", tarfile.CHRTYPE)
+write_unsafe_archive(unsafe_blockdev_archive, "rootfs/etc/config/unsafe-block", tarfile.BLKTYPE)
+write_unsafe_archive(unsafe_fifo_archive, "rootfs/etc/config/unsafe-fifo", tarfile.FIFOTYPE)
+write_unsafe_archive(unsafe_socket_archive, "rootfs/etc/config/unsafe-socket", b"s")
 
 with tarfile.open(unsafe_sysupgrade, "w:gz") as archive:
     add_file(archive, "../evil", b"unsafe\n")
@@ -760,6 +954,88 @@ if [ -e "$fixture_root/tmp/wrtbak/bad-service.marker" ] || [ -e "$fixture_root/t
 	exit 1
 fi
 assert_reject_code invalid_archive restore-sysupgrade --input "$cache_unsafe_sysupgrade" --prebackup "$prebackup" --confirm RESTORE --execute 0 --json
+
+cp "$fixture_root/etc/config/system" "$work_dir/system-before-identity.txt"
+assert_reject_code invalid_device_uid restore-apply --input "$cache_identity_mismatch_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json
+assert_reject_code missing_device_uid restore-apply --input "$cache_legacy_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json
+assert_reject_code missing_device_uid_algorithm restore-apply --input "$cache_missing_algorithm_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json
+assert_reject_code unsupported_device_uid_algorithm restore-apply --input "$cache_unsupported_algorithm_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json
+cmp "$work_dir/system-before-identity.txt" "$fixture_root/etc/config/system"
+
+cp "$fixture_root$cache_archive" "$unusable_root$cache_archive"
+cp "$fixture_root$prebackup" "$unusable_root$prebackup"
+python3 - "$unusable_root$prebackup" "$unusable_root$prebackup.receipt.json" "$prebackup" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" <<'PY'
+import hashlib
+import json
+import os
+import sys
+
+archive, receipt_path, logical_path, created_at = sys.argv[1:]
+with open(archive, "rb") as handle:
+    digest = hashlib.sha256(handle.read()).hexdigest()
+receipt = {
+    "operation": "restore-prebackup",
+    "profile": "pre-restore",
+    "items": "all",
+    "format": "wrtbak",
+    "path": logical_path,
+    "filename": os.path.basename(logical_path),
+    "size": os.path.getsize(archive),
+    "sha256": digest,
+    "created_at": created_at,
+    "host_device_id": "unusable-test-device",
+    "host_hostname": "unusable-router",
+}
+with open(receipt_path, "w", encoding="utf-8") as handle:
+    json.dump(receipt, handle)
+PY
+assert_reject_code_unusable identity_unusable restore-apply --input "$cache_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json
+if [ -e "$unusable_root/etc/config/network" ]; then
+	echo "restore-apply wrote config before rejecting unusable current identity" >&2
+	exit 1
+fi
+
+cp "$fixture_root/etc/config/system" "$work_dir/system-before-unsafe.txt"
+assert_reject_code invalid_archive restore-apply --input "$cache_unsupported_schema_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json
+for unsafe_archive in \
+	"$cache_unsafe_absolute_archive" \
+	"$cache_unsafe_dotdot_archive" \
+	"$cache_unsafe_symlink_archive" \
+	"$cache_unsafe_hardlink_archive" \
+	"$cache_unsafe_chardev_archive" \
+	"$cache_unsafe_blockdev_archive" \
+	"$cache_unsafe_fifo_archive" \
+	"$cache_unsafe_socket_archive"
+do
+	assert_reject_code invalid_archive restore-apply --input "$unsafe_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json
+done
+cmp "$work_dir/system-before-unsafe.txt" "$fixture_root/etc/config/system"
+
+printf 'target passwd\n' >"$fixture_root/etc/passwd"
+printf 'target shadow\n' >"$fixture_root/etc/shadow"
+printf 'target group\n' >"$fixture_root/etc/group"
+printf 'target gshadow\n' >"$fixture_root/etc/gshadow"
+run_cli restore-apply --input "$cache_account_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json >"$work_dir/apply-account.json"
+python3 - "$work_dir/apply-account.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+
+assert data["ok"] is True
+assert data["operation"] == "restore-apply"
+assert data["written_count"] >= 2, data
+assert data["skipped_count"] >= 4, data
+PY
+grep -Fxq "target passwd" "$fixture_root/etc/passwd"
+grep -Fxq "target shadow" "$fixture_root/etc/shadow"
+grep -Fxq "target group" "$fixture_root/etc/group"
+grep -Fxq "target gshadow" "$fixture_root/etc/gshadow"
+cat >"$fixture_root/etc/config/system" <<'EOT'
+config system
+	option hostname 'target-router'
+EOT
 
 run_cli restore-apply --input "$cache_implicit_dir_archive" --mode all --items all --prebackup "$prebackup" --confirm RESTORE --restart-services 0 --json >"$work_dir/apply-implicit-dir.json"
 python3 - "$work_dir/apply-implicit-dir.json" "$fixture_root" <<'PY'

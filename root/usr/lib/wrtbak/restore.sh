@@ -234,6 +234,91 @@ wrtbak_restore_json_file_object_array() {
 	printf ']'
 }
 
+wrtbak_restore_supported_device_uid_algorithm() {
+	wrtbak_identity_algorithm
+}
+
+wrtbak_restore_account_file_excluded() {
+	case "$1" in
+		/etc/passwd|/etc/shadow|/etc/group|/etc/gshadow)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+wrtbak_restore_skipped_files_json() {
+	wrtbak_file=$1
+	printf '['
+	wrtbak_first=1
+	while IFS='|' read -r wrtbak_path wrtbak_reason || [ -n "$wrtbak_path" ]; do
+		[ -n "$wrtbak_path" ] || continue
+		if [ "$wrtbak_first" -eq 1 ]; then
+			printf '\n'
+			wrtbak_first=0
+		else
+			printf ',\n'
+		fi
+		printf '    {\n'
+		printf '      "path": '; wrtbak_json_string "$wrtbak_path"; printf ',\n'
+		printf '      "reason": '; wrtbak_json_string "$wrtbak_reason"; printf '\n'
+		printf '    }'
+	done < "$wrtbak_file"
+
+	if [ "$wrtbak_first" -eq 1 ]; then
+		printf ']'
+	else
+		printf '\n  ]'
+	fi
+}
+
+wrtbak_restore_identity_evaluate() {
+	wrtbak_manifest=$1
+	wrtbak_restore_supported_algorithm=$(wrtbak_restore_supported_device_uid_algorithm)
+	wrtbak_restore_manifest_uid=$(wrtbak_jsonfilter_value "$wrtbak_manifest" '@.device.uid' "")
+	wrtbak_restore_manifest_uid_algorithm=$(wrtbak_jsonfilter_value "$wrtbak_manifest" '@.device.uid_algorithm' "")
+	wrtbak_restore_manifest_alias=$(wrtbak_jsonfilter_value "$wrtbak_manifest" '@.device.alias' "")
+	wrtbak_restore_current_uid=
+	wrtbak_restore_current_uid_algorithm=
+	wrtbak_restore_current_alias=
+	wrtbak_restore_current_identity_status=unusable
+	wrtbak_restore_identity_match=false
+	wrtbak_restore_can_apply=false
+	wrtbak_restore_reason=
+
+	if wrtbak_identity_load_current >/dev/null 2>&1; then
+		wrtbak_restore_current_uid=$wrtbak_identity_uid
+		wrtbak_restore_current_uid_algorithm=$wrtbak_identity_uid_algorithm
+		wrtbak_restore_current_alias=$wrtbak_identity_alias_value
+		wrtbak_restore_current_identity_status=$wrtbak_identity_status
+	fi
+
+	if [ -z "$wrtbak_restore_manifest_uid" ]; then
+		wrtbak_restore_reason=missing_device_uid
+	elif [ -z "$wrtbak_restore_manifest_uid_algorithm" ]; then
+		wrtbak_restore_reason=missing_device_uid_algorithm
+	elif [ "$wrtbak_restore_manifest_uid_algorithm" != "$wrtbak_restore_supported_algorithm" ]; then
+		wrtbak_restore_reason=unsupported_device_uid_algorithm
+	elif [ -z "$wrtbak_restore_current_uid" ] || [ "$wrtbak_restore_current_uid_algorithm" != "$wrtbak_restore_supported_algorithm" ]; then
+		wrtbak_restore_reason=identity_unusable
+	elif [ "$wrtbak_restore_current_uid" != "$wrtbak_restore_manifest_uid" ]; then
+		wrtbak_restore_reason=invalid_device_uid
+	else
+		wrtbak_restore_identity_match=true
+		wrtbak_restore_can_apply=true
+	fi
+}
+
+wrtbak_restore_require_manifest_identity() {
+	wrtbak_manifest=$1
+	wrtbak_restore_identity_evaluate "$wrtbak_manifest"
+	if [ "$wrtbak_restore_can_apply" = true ]; then
+		return 0
+	fi
+	wrtbak_restore_invalid_json restore-apply "$wrtbak_restore_reason" "restore archive does not belong to this device" "$wrtbak_restore_manifest_uid"
+	return 1
+}
+
 wrtbak_restore_firmware_label() {
 	printf '%s %s\n' "$(wrtbak_release_value DISTRIB_ID OpenWrt)" "$(wrtbak_release_value DISTRIB_RELEASE unknown)"
 }
@@ -410,6 +495,120 @@ wrtbak_restore_plan_paths_json() {
 	else
 		printf '\n    ]'
 	fi
+}
+
+wrtbak_restore_collect_restore_plan_paths() {
+	wrtbak_rootfs=$1
+	wrtbak_paths_out=$2
+	wrtbak_skipped_out=$3
+	wrtbak_summary_out=$4
+	wrtbak_work=$5
+	wrtbak_dirs="$wrtbak_work/restore-plan-dirs.list"
+	wrtbak_files="$wrtbak_work/restore-plan-files.list"
+	wrtbak_tab=$(printf '\t')
+	wrtbak_file_count=0
+	wrtbak_dir_count=0
+	wrtbak_total_bytes=0
+
+	: > "$wrtbak_paths_out"
+	: > "$wrtbak_skipped_out"
+
+	(cd "$wrtbak_rootfs" && find . -mindepth 1 -type d -print | sort) > "$wrtbak_dirs" || wrtbak_die "cannot scan restore directories"
+	while IFS= read -r wrtbak_rel || [ -n "$wrtbak_rel" ]; do
+		[ -n "$wrtbak_rel" ] || continue
+		wrtbak_child=${wrtbak_rel#./}
+		printf '/%s%sdirectory%s\n' "$wrtbak_child" "$wrtbak_tab" "$wrtbak_tab" >> "$wrtbak_paths_out"
+		wrtbak_dir_count=$((wrtbak_dir_count + 1))
+	done < "$wrtbak_dirs"
+
+	(cd "$wrtbak_rootfs" && find . -type f -print | sort) > "$wrtbak_files" || wrtbak_die "cannot scan restore files"
+	while IFS= read -r wrtbak_rel || [ -n "$wrtbak_rel" ]; do
+		[ -n "$wrtbak_rel" ] || continue
+		wrtbak_child=${wrtbak_rel#./}
+		wrtbak_path="/$wrtbak_child"
+		if wrtbak_restore_account_file_excluded "$wrtbak_path"; then
+			printf '%s|account_file_excluded\n' "$wrtbak_path" >> "$wrtbak_skipped_out"
+			continue
+		fi
+		wrtbak_size=$(wrtbak_size_of "$wrtbak_rootfs/$wrtbak_child")
+		printf '%s%sfile%s%s\n' "$wrtbak_path" "$wrtbak_tab" "$wrtbak_tab" "$wrtbak_size" >> "$wrtbak_paths_out"
+		wrtbak_file_count=$((wrtbak_file_count + 1))
+		wrtbak_total_bytes=$((wrtbak_total_bytes + wrtbak_size))
+	done < "$wrtbak_files"
+
+	printf '%s %s %s\n' "$wrtbak_file_count" "$wrtbak_dir_count" "$wrtbak_total_bytes" > "$wrtbak_summary_out"
+}
+
+wrtbak_agent_restore_plan_json() {
+	wrtbak_agent_archive=$1
+
+	[ -n "$wrtbak_agent_archive" ] || wrtbak_die "missing input file"
+	[ -r "$wrtbak_agent_archive" ] || wrtbak_die "input not readable: $wrtbak_agent_archive"
+
+	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-restore-plan.XXXXXX") || wrtbak_die "cannot create temporary directory"
+	wrtbak_set_tmp_cleanup "$wrtbak_tmp"
+	wrtbak_agent_members="$wrtbak_tmp/members.list"
+	wrtbak_agent_metadata="$wrtbak_tmp/metadata.list"
+	wrtbak_agent_extract="$wrtbak_tmp/extract"
+	wrtbak_agent_paths="$wrtbak_tmp/paths.tsv"
+	wrtbak_agent_skipped="$wrtbak_tmp/skipped.tsv"
+	wrtbak_agent_summary="$wrtbak_tmp/summary.txt"
+	wrtbak_agent_services="$wrtbak_tmp/restart-services.txt"
+
+	mkdir -p "$wrtbak_agent_extract" || wrtbak_die "cannot create extract directory"
+	wrtbak_validate_archive_metadata "$wrtbak_agent_archive" "$wrtbak_agent_members" "$wrtbak_agent_metadata"
+	if ! tar xzf "$wrtbak_agent_archive" -C "$wrtbak_agent_extract"; then
+		wrtbak_die "cannot extract $wrtbak_agent_archive"
+	fi
+	[ -f "$wrtbak_agent_extract/manifest.json" ] || wrtbak_die "manifest.json missing after extract"
+	[ -d "$wrtbak_agent_extract/rootfs" ] || wrtbak_die "rootfs/ missing after extract"
+	wrtbak_validate_tree "$wrtbak_agent_extract/rootfs" rootfs "$wrtbak_tmp"
+
+	wrtbak_agent_manifest="$wrtbak_agent_extract/manifest.json"
+	wrtbak_agent_validate_manifest "$wrtbak_agent_manifest"
+	wrtbak_restore_identity_evaluate "$wrtbak_agent_manifest"
+	wrtbak_restore_collect_restore_plan_paths "$wrtbak_agent_extract/rootfs" "$wrtbak_agent_paths" "$wrtbak_agent_skipped" "$wrtbak_agent_summary" "$wrtbak_tmp"
+	set -- $(cat "$wrtbak_agent_summary")
+	wrtbak_agent_file_count=$1
+	wrtbak_agent_dir_count=$2
+	wrtbak_agent_total_bytes=$3
+	wrtbak_agent_restore_services "$wrtbak_agent_manifest" "$wrtbak_agent_services"
+
+	printf '{\n'
+	printf '  "archive": '; wrtbak_json_string "$wrtbak_agent_archive"; printf ',\n'
+	printf '  "schema": '; wrtbak_json_string "$(wrtbak_agent_manifest_string "$wrtbak_agent_manifest" schema unknown)"; printf ',\n'
+	printf '  "profile": '; wrtbak_json_string "$(wrtbak_agent_manifest_string "$wrtbak_agent_manifest" profile unknown)"; printf ',\n'
+	printf '  "backup_id": '; wrtbak_json_string "$(wrtbak_agent_manifest_string "$wrtbak_agent_manifest" backup_id unknown)"; printf ',\n'
+	printf '  "created_at": '; wrtbak_json_string "$(wrtbak_agent_manifest_string "$wrtbak_agent_manifest" created_at unknown)"; printf ',\n'
+	printf '  "tool_version": '; wrtbak_json_string "$(wrtbak_agent_manifest_string "$wrtbak_agent_manifest" tool_version unknown)"; printf ',\n'
+	printf '  "current_device_uid": '; wrtbak_json_string "$wrtbak_restore_current_uid"; printf ',\n'
+	printf '  "current_uid": '; wrtbak_json_string "$wrtbak_restore_current_uid"; printf ',\n'
+	printf '  "manifest_device_uid": '; wrtbak_json_string "$wrtbak_restore_manifest_uid"; printf ',\n'
+	printf '  "manifest_uid": '; wrtbak_json_string "$wrtbak_restore_manifest_uid"; printf ',\n'
+	printf '  "manifest_device_uid_algorithm": '; wrtbak_json_string "$wrtbak_restore_manifest_uid_algorithm"; printf ',\n'
+	printf '  "manifest_uid_algorithm": '; wrtbak_json_string "$wrtbak_restore_manifest_uid_algorithm"; printf ',\n'
+	printf '  "manifest_device_alias": '; wrtbak_json_string "$wrtbak_restore_manifest_alias"; printf ',\n'
+	printf '  "alias": '; wrtbak_json_string "$wrtbak_restore_manifest_alias"; printf ',\n'
+	printf '  "identity_match": '; wrtbak_json_bool "$wrtbak_restore_identity_match"; printf ',\n'
+	printf '  "can_apply": '; wrtbak_json_bool "$wrtbak_restore_can_apply"; printf ',\n'
+	printf '  "reason": '; wrtbak_json_string "$wrtbak_restore_reason"; printf ',\n'
+	printf '  "file_count": %s,\n' "$wrtbak_agent_file_count"
+	printf '  "directory_count": %s,\n' "$wrtbak_agent_dir_count"
+	printf '  "total_file_bytes": %s,\n' "$wrtbak_agent_total_bytes"
+	printf '  "restart_services": '
+	wrtbak_agent_string_file_array_json "$wrtbak_agent_services"
+	printf ',\n'
+	printf '  "reboot_recommended": '; wrtbak_json_bool "$(wrtbak_agent_restore_bool "$wrtbak_agent_manifest" reboot_recommended true)"; printf ',\n'
+	printf '  "requires_confirmation": '; wrtbak_json_bool "$(wrtbak_agent_restore_bool "$wrtbak_agent_manifest" requires_confirmation true)"; printf ',\n'
+	printf '  "skipped_files": '
+	wrtbak_restore_skipped_files_json "$wrtbak_agent_skipped"
+	printf ',\n'
+	printf '  "paths": '
+	wrtbak_agent_restore_paths_json "$wrtbak_agent_paths"
+	printf '\n'
+	printf '}\n'
+
+	wrtbak_clear_tmp_cleanup
 }
 
 wrtbak_restore_sysupgrade_validate_metadata() {
@@ -1124,14 +1323,13 @@ wrtbak_restore_filter_apply_table() {
 	: > "$wrtbak_skipped"
 	: > "$wrtbak_missing"
 
-	if [ "$wrtbak_mode" = "all" ]; then
-		sort -u "$wrtbak_archive_table" > "$wrtbak_apply_table"
-		return 0
-	fi
-
 	while IFS="$wrtbak_tab" read -r wrtbak_target wrtbak_type wrtbak_mode_value wrtbak_size wrtbak_sha wrtbak_archive_path || [ -n "$wrtbak_target" ]; do
 		[ -n "$wrtbak_target" ] || continue
-		if wrtbak_restore_selected_contains "$wrtbak_target" "$wrtbak_type" "$wrtbak_selected_paths"; then
+		if [ "$wrtbak_type" = "file" ] && wrtbak_restore_account_file_excluded "$wrtbak_target"; then
+			printf '%s\n' "$wrtbak_target" >> "$wrtbak_skipped"
+			continue
+		fi
+		if [ "$wrtbak_mode" = "all" ] || wrtbak_restore_selected_contains "$wrtbak_target" "$wrtbak_type" "$wrtbak_selected_paths"; then
 			printf '%s%s%s%s%s%s%s%s%s%s%s\n' "$wrtbak_target" "$wrtbak_tab" "$wrtbak_type" "$wrtbak_tab" "$wrtbak_mode_value" "$wrtbak_tab" "$wrtbak_size" "$wrtbak_tab" "$wrtbak_sha" "$wrtbak_tab" "$wrtbak_archive_path" >> "$wrtbak_apply_table"
 		else
 			printf '%s\n' "$wrtbak_target" >> "$wrtbak_skipped"
@@ -1426,6 +1624,10 @@ wrtbak_restore_apply() {
 		wrtbak_detail=$(sed -n '1p' "$wrtbak_err")
 		wrtbak_clear_tmp_cleanup
 		wrtbak_restore_invalid_json restore-apply archive_mismatch "restore archive does not match manifest" "$wrtbak_detail"
+		return 1
+	fi
+	if ! wrtbak_restore_require_manifest_identity "$wrtbak_extract/manifest.json"; then
+		wrtbak_clear_tmp_cleanup
 		return 1
 	fi
 	wrtbak_restore_filter_archive_table_by_manifest "$wrtbak_archive_table" "$wrtbak_manifest_table" "$wrtbak_allowed_archive_table"
