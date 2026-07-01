@@ -27,16 +27,28 @@
 				"/usr/bin/wrtbak remote-status --json": [
 					"exec"
 				],
+				"/usr/bin/wrtbak firstboot-status --json": [
+					"exec"
+				],
 				"/usr/bin/wrtbak schedule-status --json": [
 					"exec"
 				],
 				"/usr/bin/wrtbak remote-list *": [
 					"exec"
 				],
+				"/usr/bin/wrtbak firstboot-candidates *": [
+					"exec"
+				],
 				"/usr/bin/wrtbak remote-download *": [
 					"exec"
 				],
 				"/usr/bin/wrtbak restore-prepare *": [
+					"exec"
+				],
+				"/usr/bin/wrtbak firstboot-prepare *": [
+					"exec"
+				],
+				"/usr/bin/wrtbak firstboot-complete --json": [
 					"exec"
 				]
 			},
@@ -82,6 +94,9 @@
 					"exec"
 				],
 				"/usr/bin/wrtbak restore-sysupgrade *": [
+					"exec"
+				],
+				"/usr/bin/wrtbak firstboot-apply *": [
 					"exec"
 				],
 				"/usr/bin/wrtbak schedule-apply --json": [

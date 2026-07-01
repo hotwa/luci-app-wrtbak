@@ -19,9 +19,14 @@ grep -Fq '"luci-app-wrtbak"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak detect --json"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak remote-status --json"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak remote-list *"' "$acl_file"
+grep -Fq '"/usr/bin/wrtbak firstboot-status --json"' "$acl_file"
+grep -Fq '"/usr/bin/wrtbak firstboot-candidates *"' "$acl_file"
+grep -Fq '"/usr/bin/wrtbak firstboot-prepare *"' "$acl_file"
+grep -Fq '"/usr/bin/wrtbak firstboot-complete --json"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak remote-test *"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak remote-upload *"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak remote-delete *"' "$acl_file"
+grep -Fq '"/usr/bin/wrtbak firstboot-apply *"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak schedule-apply --json"' "$acl_file"
 grep -Fq '"wrtbak"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak create-download *"' "$acl_file"
@@ -52,6 +57,10 @@ write_file = acl["write"]["file"]
 for command in [
     "/usr/bin/wrtbak remote-download *",
     "/usr/bin/wrtbak restore-prepare *",
+    "/usr/bin/wrtbak firstboot-status --json",
+    "/usr/bin/wrtbak firstboot-candidates *",
+    "/usr/bin/wrtbak firstboot-prepare *",
+    "/usr/bin/wrtbak firstboot-complete --json",
 ]:
     assert command in read_file, command
     assert read_file[command] == ["exec"], command
@@ -61,6 +70,7 @@ for command in [
     "/usr/bin/wrtbak restore-prebackup *",
     "/usr/bin/wrtbak restore-apply *",
     "/usr/bin/wrtbak restore-sysupgrade *",
+    "/usr/bin/wrtbak firstboot-apply *",
 ]:
     assert command in write_file, command
     assert write_file[command] == ["exec"], command
