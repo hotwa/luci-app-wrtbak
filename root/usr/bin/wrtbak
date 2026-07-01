@@ -29,6 +29,7 @@ fi
 . "$WRTBAK_LIBDIR/remote_webdav.sh"
 . "$WRTBAK_LIBDIR/remote_s3.sh"
 . "$WRTBAK_LIBDIR/restore.sh"
+. "$WRTBAK_LIBDIR/firstboot.sh"
 . "$WRTBAK_LIBDIR/schedule.sh"
 
 wrtbak_usage() {
@@ -49,6 +50,11 @@ Usage:
   wrtbak restore-prebackup --profile pre-restore --items all --format wrtbak [--require-remote 0|1] [--target default|webdav|s3] [--source-backup-key KEY] --json
   wrtbak restore-apply --input LOCAL_ARCHIVE --mode all|selected --items IDS|all --prebackup LOCAL_ARCHIVE --confirm RESTORE [--restart-services 0|1] --json
   wrtbak restore-sysupgrade --input LOCAL_ARCHIVE --prebackup LOCAL_ARCHIVE --confirm RESTORE [--execute 0|1] --json
+  wrtbak firstboot-status --json
+  wrtbak firstboot-candidates --target default|webdav|s3 --json
+  wrtbak firstboot-prepare --target default|webdav|s3 --path REMOTE_PATH --json
+  wrtbak firstboot-apply --input LOCAL_ARCHIVE --prebackup LOCAL_ARCHIVE --confirm RESTORE --json
+  wrtbak firstboot-complete --json
   wrtbak schedule-status --json
   wrtbak schedule-apply --json
   wrtbak detect [--json]
@@ -587,6 +593,35 @@ wrtbak_parse_schedule_json_only() {
 	esac
 }
 
+wrtbak_parse_firstboot_json_only() {
+	wrtbak_firstboot_command=$1
+	shift
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown $wrtbak_firstboot_command argument: $1"
+				;;
+		esac
+	done
+
+	case "$wrtbak_firstboot_command" in
+		firstboot-status)
+			wrtbak_firstboot_status_json
+			;;
+		firstboot-complete)
+			wrtbak_firstboot_complete_json
+			;;
+	esac
+}
+
 wrtbak_parse_export_sysupgrade() {
 	wrtbak_input=
 	wrtbak_output=
@@ -763,6 +798,9 @@ case "$wrtbak_command" in
 		;;
 	restore-sysupgrade)
 		wrtbak_parse_restore_sysupgrade "$@"
+		;;
+	firstboot-status|firstboot-complete)
+		wrtbak_parse_firstboot_json_only "$wrtbak_command" "$@"
 		;;
 	schedule-status|schedule-apply)
 		wrtbak_parse_schedule_json_only "$wrtbak_command" "$@"
