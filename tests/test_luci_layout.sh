@@ -91,6 +91,7 @@ PY
 grep -Fq "'require uci'" "$view_file"
 grep -Fq "runWrtbak([ 'detect', '--json' ])" "$view_file"
 grep -Fq "runWrtbak([ 'remote-status', '--json' ])" "$view_file"
+grep -Fq "runWrtbak([ 'firstboot-status', '--json' ])" "$view_file"
 grep -Fq "runWrtbak([ 'create-download'" "$view_file"
 grep -Fq "runWrtbak([ 'remote-test'" "$view_file"
 grep -Fq "runWrtbak([ 'remote-upload'" "$view_file"
@@ -101,11 +102,27 @@ grep -Fq "runWrtbak([ 'restore-prepare'" "$view_file"
 grep -Fq "runWrtbak([ 'restore-prebackup'" "$view_file"
 grep -Fq "runWrtbak([ 'restore-apply'" "$view_file"
 grep -Fq "runWrtbak([ 'restore-sysupgrade'" "$view_file"
+grep -Fq "runWrtbak([ 'firstboot-candidates', '--target'" "$view_file"
+grep -Fq "runWrtbak([ 'firstboot-prepare', '--target'" "$view_file"
+grep -Fq "runWrtbak([ 'firstboot-apply', '--input'" "$view_file"
+grep -Fq "runWrtbak([ 'firstboot-complete', '--json' ])" "$view_file"
 grep -Fq "runWrtbak([ 'schedule-apply', '--json' ])" "$view_file"
 grep -Fq "RESTORE" "$view_file"
+grep -Fq "wrtbak-firstboot-panel" "$view_file"
+grep -Fq "wrtbak-firstboot-qr" "$view_file"
+grep -Fq "wrtbak-firstboot-local-link" "$view_file"
+grep -Fq "wrtbak-firstboot-candidates" "$view_file"
+grep -Fq "wrtbak-firstboot-plan" "$view_file"
+grep -Fq "wrtbak-firstboot-confirm" "$view_file"
 grep -Fq "wrtbak-restore-panel" "$view_file"
 grep -Fq "restoreState.phase === 'prebackup_ready'" "$view_file"
 grep -Fq "confirmationInput.value === 'RESTORE'" "$view_file"
+grep -Fq "done_marker_uid_mismatch" "$view_file"
+grep -Fq "no_default_route" "$view_file"
+grep -Fq "dns_not_ready" "$view_file"
+grep -Fq "time_not_ready" "$view_file"
+grep -Fq "legacy_backup_read_only" "$view_file"
+grep -Fq "current_device_only" "$view_file"
 grep -Fq "blocked_restart_services" "$view_file"
 grep -Fq "sysupgrade_failed" "$view_file"
 grep -Fq "wrtbak-sysupgrade-execute" "$view_file"
@@ -157,6 +174,11 @@ for snippet in [
     "sysupgrade_exit_code",
     "wrtbak-restore-unknown",
     "restoreState.phase = 'idle'",
+    "firstbootState.phase = 'idle'",
+    "firstbootApplyButton.disabled = firstbootState.phase !== 'prebackup_ready'",
+    "firstbootConfirmInput.value === 'RESTORE'",
+    "'restore-prebackup', '--profile', 'pre-restore', '--items', 'all', '--format', 'wrtbak', '--require-remote', '0'",
+    "'--source-backup-key', firstbootState.selectedBackup.path",
 ]:
     assert snippet in view, snippet
 

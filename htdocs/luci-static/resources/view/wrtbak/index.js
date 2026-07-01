@@ -247,6 +247,46 @@ function renderBackupRows(table, backups, onDelete, onRestore) {
 	});
 }
 
+function replaceChildren(node, children) {
+	node.innerHTML = '';
+
+	(Array.isArray(children) ? children : [ children ]).forEach(function(child) {
+		if (child == null)
+			return;
+
+		node.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
+	});
+}
+
+function statusTag(ok, text) {
+	return E('span', { 'class': ok ? 'cbi-tag cbi-tag-success' : 'cbi-tag cbi-tag-warning' }, text);
+}
+
+function reasonLabel(reason) {
+	switch (reason) {
+	case 'done_marker_uid_mismatch':
+		return 'done_marker_uid_mismatch';
+	case 'no_default_route':
+		return 'no_default_route';
+	case 'dns_not_ready':
+		return 'dns_not_ready';
+	case 'time_not_ready':
+		return 'time_not_ready';
+	case 'legacy_backup_read_only':
+		return 'legacy_backup_read_only';
+	case 'current_device_only':
+		return 'current_device_only';
+	case 'identity_unusable':
+		return 'identity_unusable';
+	default:
+		return reason || '-';
+	}
+}
+
+function jsonBlock(data) {
+	return E('pre', { 'class': 'wrtbak-json-block' }, JSON.stringify(data || {}, null, 2));
+}
+
 return view.extend({
 	handleSaveApply: null,
 	handleSave: null,
@@ -256,11 +296,13 @@ return view.extend({
 		return Promise.all([
 			runWrtbak([ 'detect', '--json' ]),
 			runWrtbak([ 'remote-status', '--json' ]),
+			runWrtbak([ 'firstboot-status', '--json' ]),
 			uci.load('wrtbak')
 		]).then(function(results) {
 			return {
 				detect: results[0],
-				remote: results[1]
+				remote: results[1],
+				firstboot: results[2]
 			};
 		});
 	},
@@ -329,11 +371,21 @@ return view.extend({
 		var restoreState = { phase: 'idle', target: null, backup: null, download: null, prepare: null, prebackup: null, apply: null, sysupgradePreflight: null, error: null, unknown: false };
 		var restorePanel = E('div', { 'class': 'cbi-section wrtbak-restore-panel' });
 		var confirmationInput = textInput('wrtbak-restore-confirmation', '');
+		var firstbootState = { phase: 'idle', status: data.firstboot || {}, candidates: null, selectedBackup: null, prepare: null, prebackup: null, apply: null, complete: null, error: null };
+		var firstbootPanel = E('div', { 'class': 'cbi-section wrtbak-firstboot-panel' });
+		var firstbootStatusPanel = E('div', { 'class': 'wrtbak-firstboot-status' });
+		var firstbootCandidatesPanel = E('div', { 'class': 'wrtbak-firstboot-candidates' });
+		var firstbootPlanPanel = E('div', { 'class': 'wrtbak-firstboot-plan' });
+		var firstbootConfirmInput = textInput('wrtbak-firstboot-confirmation', '');
+		firstbootConfirmInput.className += ' wrtbak-firstboot-confirm';
 		var prebackupButton;
 		var applyButton;
 		var applyAllButton;
 		var sysupgradePreflightButton;
 		var sysupgradeExecuteButton;
+		var firstbootListButton;
+		var firstbootPrebackupButton;
+		var firstbootApplyButton;
 		var previousButton;
 		var nextButton;
 		var table = E('table', { 'class': 'table' }, [
@@ -574,6 +626,323 @@ return view.extend({
 			appendJsonList(parent, _('Missing from archive'), result.missing_from_archive);
 			if (result.restore_log)
 				parent.appendChild(E('p', {}, [ E('strong', {}, _('Restore log')), ': ', E('code', {}, result.restore_log) ]));
+		}
+
+		function firstbootConfirmed() {
+			return firstbootConfirmInput.value === 'RESTORE';
+		}
+
+		function firstbootInputPath() {
+			return firstbootState.prepare && firstbootState.prepare.download && firstbootState.prepare.download.path;
+		}
+
+		function updateFirstbootButtons() {
+			if (!firstbootPrebackupButton || !firstbootApplyButton)
+				return;
+
+			firstbootPrebackupButton.disabled = firstbootState.phase !== 'prepared';
+			firstbootApplyButton.disabled = firstbootState.phase !== 'prebackup_ready' || !firstbootConfirmed() || !firstbootState.prebackup || !firstbootInputPath();
+		}
+
+		function resetFirstbootState() {
+			firstbootState.phase = 'idle';
+			firstbootState.candidates = null;
+			firstbootState.selectedBackup = null;
+			firstbootState.prepare = null;
+			firstbootState.prebackup = null;
+			firstbootState.apply = null;
+			firstbootState.complete = null;
+			firstbootState.error = null;
+			firstbootConfirmInput.value = '';
+			renderFirstbootPanel();
+		}
+
+		function failFirstboot(err) {
+			firstbootState.error = err && err.data ? (err.data.message || err.data.code) : ((err && err.message) || String(err));
+			firstbootState.phase = 'failed';
+			renderFirstbootPanel();
+			ui.addNotification(null, E('p', {}, firstbootState.error), 'danger');
+		}
+
+		function renderFirstbootStatus() {
+			var status = firstbootState.status || {};
+			var identity = status.identity || {};
+			var network = status.network || {};
+			var done = status.done_marker || {};
+			var reasons = Array.isArray(status.blocked_reasons) ? status.blocked_reasons : [];
+			var qr = E('div', { 'class': 'wrtbak-firstboot-qr' });
+
+			if (status.qr_svg)
+				qr.innerHTML = status.qr_svg;
+			else
+				qr.appendChild(E('em', {}, _('QR code unavailable')));
+
+			replaceChildren(firstbootStatusPanel, [
+				E('p', {}, [
+					E('strong', {}, _('Device UID')),
+					': ',
+					E('code', {}, identity.uid || '-')
+				]),
+				E('p', {}, [
+					E('strong', {}, _('Device')),
+					': ',
+					identity.hostname || '-',
+					' / ',
+					identity.board || '-',
+					' / ',
+					identity.mac || '-'
+				]),
+				E('p', {}, [
+					E('strong', {}, _('Local URL')),
+					': ',
+					E('a', { 'class': 'wrtbak-firstboot-local-link', href: status.local_url || '#', target: '_blank', rel: 'noreferrer' }, status.local_url || '-')
+				]),
+				E('div', { 'class': 'wrtbak-firstboot-checks' }, [
+					statusTag(network.default_route === true, network.default_route === true ? _('Default route ready') : reasonLabel('no_default_route')),
+					' ',
+					statusTag(network.dns === true, network.dns === true ? _('DNS ready') : reasonLabel('dns_not_ready')),
+					' ',
+					statusTag(network.time === true, network.time === true ? _('Time ready') : reasonLabel('time_not_ready')),
+					' ',
+					statusTag(done.exists !== true || done.status === 'ok', done.exists === true && done.status !== 'ok' ? reasonLabel('done_marker_uid_mismatch') : _('Done marker ok'))
+				]),
+				reasons.length ? E('p', { 'class': 'alert-message warning' }, [
+					E('strong', {}, _('Blocked')),
+					': ',
+					reasons.map(function(reason) { return reasonLabel(reason); }).join(', ')
+				]) : E('p', { 'class': 'alert-message info' }, _('Firstboot checks are clear.')),
+				qr
+			]);
+		}
+
+		function renderFirstbootCandidates() {
+			var result = firstbootState.candidates;
+			var backups = result && result.remote && Array.isArray(result.remote.backups) ? result.remote.backups : [];
+			var table;
+
+			if (!result) {
+				replaceChildren(firstbootCandidatesPanel, E('p', {}, _('Scan the configured remote target to find backups for this device.')));
+				return;
+			}
+
+			table = E('table', { 'class': 'table' }, [
+				E('tr', { 'class': 'tr table-titles' }, [
+					E('th', { 'class': 'th' }, _('File')),
+					E('th', { 'class': 'th' }, _('Format')),
+					E('th', { 'class': 'th' }, _('Modified')),
+					E('th', { 'class': 'th right' }, _('Action'))
+				])
+			]);
+
+			if (!backups.length) {
+				table.appendChild(E('tr', { 'class': 'tr' }, [
+					E('td', { 'class': 'td', colspan: 4 }, E('em', {}, _('No matching firstboot backups')))
+				]));
+			}
+
+			backups.forEach(function(backup) {
+				var path = backup.path || backup.filename || '';
+				var readOnly = backup.legacy === true || !String(path).match(/(^|\/)devices\/[^/]+\/wrtbak\//);
+				var actions = readOnly ? [
+					E('span', { 'class': 'cbi-tag cbi-tag-warning' }, reasonLabel('legacy_backup_read_only'))
+				] : [
+					E('button', {
+						type: 'button',
+						'class': 'btn cbi-button cbi-button-action',
+						click: function() { firstbootPrepareBackup(backup); }
+					}, _('Review restore'))
+				];
+
+				table.appendChild(E('tr', { 'class': 'tr' }, [
+					E('td', { 'class': 'td' }, E('code', {}, path || '-')),
+					E('td', { 'class': 'td' }, backup.format || '-'),
+					E('td', { 'class': 'td' }, backup.modified || '-'),
+					E('td', { 'class': 'td right' }, actions)
+				]));
+			});
+
+			replaceChildren(firstbootCandidatesPanel, [
+				E('p', {}, [
+					E('strong', {}, _('Write policy')),
+					': ',
+					reasonLabel(result.write_policy || 'current_device_only')
+				]),
+				table
+			]);
+		}
+
+		function renderFirstbootPlan() {
+			var plan = firstbootState.prepare && firstbootState.prepare.plan ? firstbootState.prepare.plan : null;
+
+			firstbootPlanPanel.innerHTML = '';
+			firstbootPlanPanel.appendChild(E('h4', {}, _('Firstboot restore plan')));
+			firstbootPlanPanel.appendChild(E('p', {}, [
+				E('strong', {}, _('Status')),
+				': ',
+				firstbootState.phase
+			]));
+
+			if (firstbootState.selectedBackup) {
+				firstbootPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Remote path')),
+					': ',
+					E('code', {}, firstbootState.selectedBackup.path || firstbootState.selectedBackup.filename || '-')
+				]));
+			}
+
+			if (firstbootState.prepare) {
+				firstbootPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Local path')),
+					': ',
+					E('code', {}, (firstbootState.prepare.download && (firstbootState.prepare.download.local_path || firstbootState.prepare.download.path)) || '-')
+				]));
+				appendRestorePlan(firstbootPlanPanel, firstbootState.prepare.prepare);
+				firstbootPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Apply gate')),
+					': ',
+					statusTag(plan && plan.can_apply === true, plan && plan.can_apply === true ? reasonLabel('current_device_only') : reasonLabel(plan && plan.reason))
+				]));
+				firstbootPlanPanel.appendChild(jsonBlock(plan));
+			}
+
+			if (firstbootState.prebackup) {
+				firstbootPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Pre-restore backup')),
+					': ',
+					E('code', {}, firstbootState.prebackup.path || '-')
+				]));
+			}
+
+			if (firstbootState.apply) {
+				appendApplyResult(firstbootPlanPanel, firstbootState.apply.apply);
+				firstbootPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Completion receipt')),
+					': ',
+					E('code', {}, firstbootState.apply.completion_receipt || '-')
+				]));
+			}
+
+			if (firstbootState.complete) {
+				firstbootPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Done marker')),
+					': ',
+					E('code', {}, (firstbootState.complete.done_marker && firstbootState.complete.done_marker.path) || '-')
+				]));
+			}
+
+			if (firstbootState.error)
+				firstbootPlanPanel.appendChild(E('div', { 'class': 'alert-message danger' }, firstbootState.error));
+
+			firstbootPlanPanel.appendChild(field('wrtbak-firstboot-confirmation', _('Confirmation'), firstbootConfirmInput));
+			firstbootPlanPanel.appendChild(E('div', { 'class': 'cbi-page-actions' }, [
+				firstbootPrebackupButton,
+				' ',
+				firstbootApplyButton
+			]));
+			updateFirstbootButtons();
+		}
+
+		function renderFirstbootPanel() {
+			replaceChildren(firstbootPanel, [
+				E('h3', {}, _('Firstboot restore')),
+				firstbootStatusPanel,
+				E('div', { 'class': 'cbi-page-actions' }, [
+					firstbootListButton,
+					' ',
+					E('button', {
+						type: 'button',
+						'class': 'btn cbi-button',
+						click: ui.createHandlerFn(this, function() {
+							return runWrtbak([ 'firstboot-status', '--json' ]).then(function(status) {
+								firstbootState.status = status;
+								renderFirstbootPanel();
+							}).catch(failFirstboot);
+						})
+					}, _('Refresh firstboot status')),
+					' ',
+					E('button', {
+						type: 'button',
+						'class': 'btn cbi-button',
+						click: ui.createHandlerFn(this, resetFirstbootState)
+					}, _('Reset firstboot review'))
+				]),
+				firstbootCandidatesPanel,
+				firstbootPlanPanel
+			]);
+			renderFirstbootStatus();
+			renderFirstbootCandidates();
+			renderFirstbootPlan();
+		}
+
+		function firstbootListCandidates() {
+			firstbootState.phase = 'listing';
+			firstbootState.candidates = null;
+			firstbootState.selectedBackup = null;
+			firstbootState.prepare = null;
+			firstbootState.prebackup = null;
+			firstbootState.apply = null;
+			firstbootState.complete = null;
+			firstbootState.error = null;
+			firstbootConfirmInput.value = '';
+			renderFirstbootPanel();
+
+			return saveConfig().then(function() {
+				return runWrtbak([ 'firstboot-candidates', '--target', selectedTarget(), '--json' ]);
+			}).then(function(result) {
+				firstbootState.candidates = result;
+				firstbootState.phase = 'candidates';
+				renderFirstbootPanel();
+				ui.addNotification(null, E('p', {}, _('Firstboot backups loaded.')), 'info');
+			}).catch(failFirstboot);
+		}
+
+		function firstbootPrepareBackup(backup) {
+			firstbootState.phase = 'preparing';
+			firstbootState.selectedBackup = backup;
+			firstbootState.prepare = null;
+			firstbootState.prebackup = null;
+			firstbootState.apply = null;
+			firstbootState.complete = null;
+			firstbootState.error = null;
+			firstbootConfirmInput.value = '';
+			renderFirstbootPanel();
+
+			return runWrtbak([ 'firstboot-prepare', '--target', selectedTarget(), '--path', backup.path, '--json' ]).then(function(result) {
+				firstbootState.prepare = result;
+				firstbootState.phase = result.plan && result.plan.can_apply === true ? 'prepared' : 'blocked';
+				renderFirstbootPanel();
+				ui.addNotification(null, E('p', {}, _('Firstboot restore plan prepared.')), 'info');
+			}).catch(failFirstboot);
+		}
+
+		function firstbootCreatePrebackup() {
+			if (firstbootState.phase !== 'prepared' || !firstbootState.selectedBackup)
+				return Promise.resolve();
+
+			return runWrtbak([ 'restore-prebackup', '--profile', 'pre-restore', '--items', 'all', '--format', 'wrtbak', '--require-remote', '0', '--source-backup-key', firstbootState.selectedBackup.path, '--json' ]).then(function(result) {
+				firstbootState.prebackup = result;
+				firstbootState.phase = 'prebackup_ready';
+				renderFirstbootPanel();
+				ui.addNotification(null, E('p', {}, _('Firstboot pre-restore backup created.')), 'info');
+			}).catch(failFirstboot);
+		}
+
+		function firstbootApplyRestore() {
+			if (firstbootState.phase !== 'prebackup_ready' || !firstbootConfirmed())
+				return Promise.resolve();
+
+			firstbootState.phase = 'applying';
+			renderFirstbootPanel();
+
+			return runWrtbak([ 'firstboot-apply', '--input', firstbootInputPath(), '--prebackup', firstbootState.prebackup.path, '--confirm', 'RESTORE', '--json' ]).then(function(result) {
+				firstbootState.apply = result;
+				return runWrtbak([ 'firstboot-complete', '--json' ]);
+			}).then(function(result) {
+				firstbootState.complete = result;
+				firstbootState.phase = 'complete';
+				renderFirstbootPanel();
+				ui.addNotification(null, E('p', {}, _('Firstboot restore completed.')), 'info');
+			}).catch(failFirstboot);
 		}
 
 		function renderRestorePanel() {
@@ -917,8 +1286,29 @@ return view.extend({
 			click: ui.createHandlerFn(this, executeSysupgrade)
 		}, _('Execute sysupgrade restore'));
 
+		firstbootConfirmInput.addEventListener('input', updateFirstbootButtons);
+
+		firstbootListButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-action',
+			click: ui.createHandlerFn(this, firstbootListCandidates)
+		}, _('Scan firstboot backups'));
+
+		firstbootPrebackupButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-action',
+			click: ui.createHandlerFn(this, firstbootCreatePrebackup)
+		}, _('Create firstboot pre-restore backup'));
+
+		firstbootApplyButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-negative',
+			click: ui.createHandlerFn(this, firstbootApplyRestore)
+		}, _('Apply firstboot restore'));
+
 		var page = E('div', { 'class': 'wrtbak-page' }, [
 			E('h2', {}, _('Wrtbak')),
+			firstbootPanel,
 			E('div', { 'class': 'cbi-section' }, [
 				field('wrtbak-profile', _('Profile'), profile),
 				field('wrtbak-format', _('Archive'), format),
@@ -973,6 +1363,7 @@ return view.extend({
 
 		updatePagination(rows, pagination, pageSize, pageSummary, previousButton, nextButton);
 		renderBackupRows(remoteTable, [], function() {}, function() {});
+		renderFirstbootPanel();
 		renderRestorePanel();
 
 		return page;
