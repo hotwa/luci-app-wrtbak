@@ -114,6 +114,8 @@ wrtbak_firstboot_done_marker_json() {
 	printf '    "status": '; wrtbak_json_string "$wrtbak_done_status"; printf ',\n'
 	printf '    "path": '; wrtbak_json_string "$wrtbak_done_logical"; printf ',\n'
 	printf '    "device_uid": '; wrtbak_json_string "$wrtbak_done_uid"; printf ',\n'
+	printf '    "backup_remote_path": '; wrtbak_json_string "$(wrtbak_jsonfilter_value "$wrtbak_done_actual" '@.backup_remote_path' "")"; printf ',\n'
+	printf '    "prebackup_path": '; wrtbak_json_string "$(wrtbak_jsonfilter_value "$wrtbak_done_actual" '@.prebackup_path' "")"; printf ',\n'
 	printf '    "created_at": '; wrtbak_json_string "$(wrtbak_jsonfilter_value "$wrtbak_done_actual" '@.created_at' "")"; printf ',\n'
 	printf '    "restore_receipt": '; wrtbak_json_string "$(wrtbak_jsonfilter_value "$wrtbak_done_actual" '@.restore_receipt' "")"; printf '\n'
 	printf '  }'
@@ -350,4 +352,148 @@ wrtbak_firstboot_prepare_json() {
 	printf '  "plan": '; cat "$wrtbak_plan_tmp"; printf '\n'
 	printf '}\n'
 	rm -f "$wrtbak_download_tmp" "$wrtbak_prepare_tmp" "$wrtbak_plan_tmp" "$wrtbak_download_view_tmp"
+}
+
+wrtbak_firstboot_write_json_atomic() {
+	wrtbak_path=$1
+	wrtbak_tmp="$wrtbak_path.tmp.$$"
+
+	umask 077
+	cat >"$wrtbak_tmp" || {
+		rm -f "$wrtbak_tmp"
+		return 1
+	}
+	mv -f "$wrtbak_tmp" "$wrtbak_path"
+}
+
+wrtbak_firstboot_remote_path_for_input() {
+	wrtbak_input=$1
+	wrtbak_sidecar_actual=$(wrtbak_root_path "$wrtbak_input.remote.json")
+
+	if [ -f "$wrtbak_sidecar_actual" ] && [ ! -L "$wrtbak_sidecar_actual" ]; then
+		wrtbak_jsonfilter_value "$wrtbak_sidecar_actual" '@.remote_path' ""
+	fi
+}
+
+wrtbak_firstboot_write_done_marker() {
+	wrtbak_device_uid=$1
+	wrtbak_remote_path=$2
+	wrtbak_prebackup=$3
+	wrtbak_restore_receipt=$4
+	wrtbak_done_actual=$(wrtbak_root_path "$(wrtbak_firstboot_done_logical_path)")
+
+	mkdir -p "$(dirname -- "$wrtbak_done_actual")" || return 1
+	{
+		printf '{\n'
+		printf '  "ok": true,\n'
+		printf '  "device_uid": '; wrtbak_json_string "$wrtbak_device_uid"; printf ',\n'
+		printf '  "backup_remote_path": '; wrtbak_json_string "$wrtbak_remote_path"; printf ',\n'
+		printf '  "prebackup_path": '; wrtbak_json_string "$wrtbak_prebackup"; printf ',\n'
+		printf '  "restore_receipt": '; wrtbak_json_string "$wrtbak_restore_receipt"; printf ',\n'
+		printf '  "created_at": '; wrtbak_json_string "$(wrtbak_created_at)"; printf '\n'
+		printf '}\n'
+	} | wrtbak_firstboot_write_json_atomic "$wrtbak_done_actual"
+}
+
+wrtbak_firstboot_write_completion_receipt() {
+	wrtbak_device_uid=$1
+	wrtbak_remote_path=$2
+	wrtbak_prebackup=$3
+	wrtbak_apply_stage=$4
+	wrtbak_receipts_actual=$(wrtbak_root_path "$(wrtbak_firstboot_receipts_logical_dir)")
+
+	mkdir -p "$wrtbak_receipts_actual" || return 1
+	wrtbak_receipt_logical="$(wrtbak_firstboot_receipts_logical_dir)/$(date -u +%Y%m%dT%H%M%SZ)-restore.json"
+	wrtbak_receipt_actual=$(wrtbak_root_path "$wrtbak_receipt_logical")
+	{
+		printf '{\n'
+		printf '  "ok": true,\n'
+		printf '  "operation": "firstboot-apply",\n'
+		printf '  "stage": '; wrtbak_json_string "$wrtbak_apply_stage"; printf ',\n'
+		printf '  "device_uid": '; wrtbak_json_string "$wrtbak_device_uid"; printf ',\n'
+		printf '  "backup_remote_path": '; wrtbak_json_string "$wrtbak_remote_path"; printf ',\n'
+		printf '  "prebackup_path": '; wrtbak_json_string "$wrtbak_prebackup"; printf ',\n'
+		printf '  "created_at": '; wrtbak_json_string "$(wrtbak_created_at)"; printf '\n'
+		printf '}\n'
+	} | wrtbak_firstboot_write_json_atomic "$wrtbak_receipt_actual" || return 1
+	printf '%s\n' "$wrtbak_receipt_logical"
+}
+
+wrtbak_firstboot_apply_json() {
+	wrtbak_input=$1
+	wrtbak_prebackup=$2
+	wrtbak_confirm=$3
+
+	if [ "$wrtbak_confirm" != "RESTORE" ]; then
+		wrtbak_firstboot_error_json firstboot-apply confirmation_required "confirmation must be RESTORE" ""
+		return 1
+	fi
+
+	wrtbak_plan_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-apply-plan.XXXXXX") || return 1
+	wrtbak_apply_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-apply.XXXXXX") || {
+		rm -f "$wrtbak_plan_tmp"
+		return 1
+	}
+	wrtbak_done_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-apply-done.XXXXXX") || {
+		rm -f "$wrtbak_plan_tmp" "$wrtbak_apply_tmp"
+		return 1
+	}
+	wrtbak_actual_input=$(wrtbak_root_path "$wrtbak_input")
+
+	if ! wrtbak_agent_restore_plan_json "$wrtbak_actual_input" >"$wrtbak_plan_tmp"; then
+		rm -f "$wrtbak_plan_tmp" "$wrtbak_apply_tmp" "$wrtbak_done_tmp"
+		wrtbak_firstboot_error_json firstboot-apply invalid_archive "restore plan failed" "$wrtbak_input"
+		return 1
+	fi
+
+	wrtbak_can_apply=$(wrtbak_jsonfilter_value "$wrtbak_plan_tmp" '@.can_apply' "false")
+	if [ "$wrtbak_can_apply" != "true" ]; then
+		wrtbak_reason=$(wrtbak_jsonfilter_value "$wrtbak_plan_tmp" '@.reason' "identity_unusable")
+		rm -f "$wrtbak_plan_tmp" "$wrtbak_apply_tmp" "$wrtbak_done_tmp"
+		wrtbak_firstboot_error_json firstboot-apply "$wrtbak_reason" "restore archive does not belong to this device" "$wrtbak_input"
+		return 1
+	fi
+
+	if ! wrtbak_restore_apply "$wrtbak_input" all all "$wrtbak_prebackup" RESTORE 0 >"$wrtbak_apply_tmp"; then
+		wrtbak_code=$(wrtbak_jsonfilter_value "$wrtbak_apply_tmp" '@.code' "restore_failed")
+		wrtbak_message=$(wrtbak_jsonfilter_value "$wrtbak_apply_tmp" '@.message' "restore apply failed")
+		rm -f "$wrtbak_plan_tmp" "$wrtbak_apply_tmp" "$wrtbak_done_tmp"
+		wrtbak_firstboot_error_json firstboot-apply "$wrtbak_code" "$wrtbak_message" "$wrtbak_input"
+		return 1
+	fi
+
+	wrtbak_device_uid=$(wrtbak_jsonfilter_value "$wrtbak_plan_tmp" '@.current_uid' "")
+	wrtbak_remote_path=$(wrtbak_firstboot_remote_path_for_input "$wrtbak_input")
+	wrtbak_receipt_logical=$(wrtbak_firstboot_write_completion_receipt "$wrtbak_device_uid" "$wrtbak_remote_path" "$wrtbak_prebackup" complete)
+	wrtbak_firstboot_write_done_marker "$wrtbak_device_uid" "$wrtbak_remote_path" "$wrtbak_prebackup" "$wrtbak_receipt_logical"
+	wrtbak_firstboot_done_marker_json "$wrtbak_device_uid" >"$wrtbak_done_tmp"
+
+	printf '{\n'
+	printf '  "ok": true,\n'
+	printf '  "operation": "firstboot-apply",\n'
+	printf '  "plan": '; cat "$wrtbak_plan_tmp"; printf ',\n'
+	printf '  "apply": '; cat "$wrtbak_apply_tmp"; printf ',\n'
+	printf '  "done_marker": '; cat "$wrtbak_done_tmp"; printf ',\n'
+	printf '  "completion_receipt": '; wrtbak_json_string "$wrtbak_receipt_logical"; printf '\n'
+	printf '}\n'
+
+	rm -f "$wrtbak_plan_tmp" "$wrtbak_apply_tmp" "$wrtbak_done_tmp"
+}
+
+wrtbak_firstboot_complete_json() {
+	wrtbak_identity_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-complete-identity.XXXXXX") || return 1
+	if wrtbak_identity_current_json >"$wrtbak_identity_tmp" 2>/dev/null; then
+		wrtbak_current_uid=$(wrtbak_jsonfilter_value "$wrtbak_identity_tmp" '@.uid' "")
+	else
+		wrtbak_current_uid=
+	fi
+
+	printf '{\n'
+	printf '  "ok": true,\n'
+	printf '  "operation": "firstboot-complete",\n'
+	printf '  "done_marker": '
+	wrtbak_firstboot_done_marker_json "$wrtbak_current_uid"
+	printf '\n'
+	printf '}\n'
+	rm -f "$wrtbak_identity_tmp"
 }

@@ -284,4 +284,68 @@ assert data["operation"] == "firstboot-prepare", data
 assert data["code"] in ["legacy_backup_read_only", "invalid_config"], data
 PY
 
+prepare_input=$(python3 - "$work_dir/prepare.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+print(data["download"]["path"])
+PY
+)
+
+run_cli restore-prebackup --profile pre-restore --items all --format wrtbak --require-remote 0 --source-backup-key "$current_remote" --json >"$work_dir/prebackup.json"
+prebackup_path=$(python3 - "$work_dir/prebackup.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+print(data["path"])
+PY
+)
+
+if run_cli firstboot-apply --input "$prepare_input" --prebackup "$prebackup_path" --confirm WRONG --json >"$work_dir/bad-apply.json" 2>"$work_dir/bad-apply.err"; then
+	echo "firstboot apply accepted wrong confirmation" >&2
+	exit 1
+fi
+python3 - "$work_dir/bad-apply.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+assert data["ok"] is False, data
+assert data["code"] == "confirmation_required", data
+PY
+
+run_cli firstboot-apply --input "$prepare_input" --prebackup "$prebackup_path" --confirm RESTORE --json >"$work_dir/apply.json"
+python3 - "$work_dir/apply.json" "$current_remote" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+remote_path = sys.argv[2]
+assert data["ok"] is True, data
+assert data["operation"] == "firstboot-apply", data
+assert data["plan"]["can_apply"] is True, data
+assert data["done_marker"]["status"] == "ok", data
+assert data["done_marker"]["backup_remote_path"] == remote_path, data
+assert data["completion_receipt"].endswith("-restore.json"), data
+PY
+
+run_cli firstboot-complete --json >"$work_dir/complete.json"
+python3 - "$work_dir/complete.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+assert data["ok"] is True, data
+assert data["operation"] == "firstboot-complete", data
+assert data["done_marker"]["exists"] is True, data
+assert data["done_marker"]["status"] == "ok", data
+PY
+
 echo "firstboot restore flow fixture passed"
