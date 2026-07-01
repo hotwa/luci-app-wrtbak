@@ -622,6 +622,67 @@ wrtbak_parse_firstboot_json_only() {
 	esac
 }
 
+wrtbak_parse_firstboot_candidates() {
+	wrtbak_target=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown firstboot-candidates argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_target" ] || wrtbak_target=default
+	wrtbak_firstboot_candidates_json "$wrtbak_target"
+}
+
+wrtbak_parse_firstboot_prepare() {
+	wrtbak_target=
+	wrtbak_path=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--path)
+				[ "$#" -ge 2 ] || wrtbak_die "--path requires a value"
+				wrtbak_path=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown firstboot-prepare argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_target" ] || wrtbak_target=default
+	[ -n "$wrtbak_path" ] || wrtbak_die "--path is required"
+	wrtbak_firstboot_prepare_json "$wrtbak_target" "$wrtbak_path"
+}
+
 wrtbak_parse_export_sysupgrade() {
 	wrtbak_input=
 	wrtbak_output=
@@ -801,6 +862,12 @@ case "$wrtbak_command" in
 		;;
 	firstboot-status|firstboot-complete)
 		wrtbak_parse_firstboot_json_only "$wrtbak_command" "$@"
+		;;
+	firstboot-candidates)
+		wrtbak_parse_firstboot_candidates "$@"
+		;;
+	firstboot-prepare)
+		wrtbak_parse_firstboot_prepare "$@"
 		;;
 	schedule-status|schedule-apply)
 		wrtbak_parse_schedule_json_only "$wrtbak_command" "$@"

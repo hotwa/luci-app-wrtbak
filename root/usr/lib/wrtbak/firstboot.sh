@@ -197,3 +197,157 @@ wrtbak_firstboot_status_json() {
 
 	rm -f "$wrtbak_identity_tmp" "$wrtbak_remote_tmp" "$wrtbak_network_tmp" "$wrtbak_done_tmp"
 }
+
+wrtbak_firstboot_target_arg() {
+	wrtbak_target=$1
+	[ -n "$wrtbak_target" ] || wrtbak_target=default
+	printf '%s\n' "$wrtbak_target"
+}
+
+wrtbak_firstboot_logical_path_for_actual() {
+	wrtbak_actual_path=$1
+	wrtbak_root=${WRTBAK_ROOT:-/}
+
+	case "$wrtbak_root" in
+		""|"/")
+			printf '%s\n' "$wrtbak_actual_path"
+			return 0
+			;;
+	esac
+
+	case "$wrtbak_actual_path" in
+		"${wrtbak_root%/}"/*)
+			printf '/%s\n' "${wrtbak_actual_path#"${wrtbak_root%/}/"}"
+			return 0
+			;;
+		*)
+			printf '%s\n' "$wrtbak_actual_path"
+			return 0
+			;;
+	esac
+}
+
+wrtbak_firstboot_candidates_json() {
+	wrtbak_target=$(wrtbak_firstboot_target_arg "$1")
+	wrtbak_identity_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-candidates-identity.XXXXXX") || return 1
+	wrtbak_remote_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-candidates-remote.XXXXXX") || {
+		rm -f "$wrtbak_identity_tmp"
+		return 1
+	}
+
+	if ! wrtbak_identity_current_json >"$wrtbak_identity_tmp"; then
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_remote_tmp"
+		wrtbak_firstboot_error_json firstboot-candidates identity_unusable "current device identity is unusable" ""
+		return 1
+	fi
+	if ! wrtbak_remote_list "$wrtbak_target" >"$wrtbak_remote_tmp"; then
+		wrtbak_code=$(wrtbak_jsonfilter_value "$wrtbak_remote_tmp" '@.code' "remote_unreachable")
+		wrtbak_message=$(wrtbak_jsonfilter_value "$wrtbak_remote_tmp" '@.message' "remote listing failed")
+		wrtbak_detail=$(wrtbak_jsonfilter_value "$wrtbak_remote_tmp" '@.detail' "")
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_remote_tmp"
+		wrtbak_firstboot_error_json firstboot-candidates "$wrtbak_code" "$wrtbak_message" "$wrtbak_detail"
+		return 1
+	fi
+
+	printf '{\n'
+	printf '  "ok": true,\n'
+	printf '  "operation": "firstboot-candidates",\n'
+	printf '  "target": '; wrtbak_json_string "$wrtbak_target"; printf ',\n'
+	printf '  "identity": '; cat "$wrtbak_identity_tmp"; printf ',\n'
+	printf '  "write_policy": "current_device_only",\n'
+	printf '  "remote": '; cat "$wrtbak_remote_tmp"; printf '\n'
+	printf '}\n'
+	rm -f "$wrtbak_identity_tmp" "$wrtbak_remote_tmp"
+}
+
+wrtbak_firstboot_download_result_json() {
+	wrtbak_download_file=$1
+	wrtbak_local_path=$(wrtbak_jsonfilter_value "$wrtbak_download_file" '@.local_path' "")
+	wrtbak_logical_path=$(wrtbak_firstboot_logical_path_for_actual "$wrtbak_local_path")
+	wrtbak_size=$(wrtbak_jsonfilter_value "$wrtbak_download_file" '@.size' "0")
+
+	printf '{\n'
+	printf '    "ok": true,\n'
+	printf '    "operation": "remote-download",\n'
+	printf '    "target": '; wrtbak_json_string "$(wrtbak_jsonfilter_value "$wrtbak_download_file" '@.target' "")"; printf ',\n'
+	printf '    "driver": '; wrtbak_json_string "$(wrtbak_jsonfilter_value "$wrtbak_download_file" '@.driver' "")"; printf ',\n'
+	printf '    "remote_path": '; wrtbak_json_string "$(wrtbak_jsonfilter_value "$wrtbak_download_file" '@.remote_path' "")"; printf ',\n'
+	printf '    "path": '; wrtbak_json_string "$wrtbak_logical_path"; printf ',\n'
+	printf '    "local_path": '; wrtbak_json_string "$wrtbak_local_path"; printf ',\n'
+	printf '    "sidecar_path": '; wrtbak_json_string "$(wrtbak_jsonfilter_value "$wrtbak_download_file" '@.sidecar_path' "")"; printf ',\n'
+	printf '    "filename": '; wrtbak_json_string "$(wrtbak_jsonfilter_value "$wrtbak_download_file" '@.filename' "")"; printf ',\n'
+	printf '    "format": '; wrtbak_json_string "$(wrtbak_jsonfilter_value "$wrtbak_download_file" '@.format' "")"; printf ',\n'
+	printf '    "size": %s,\n' "$wrtbak_size"
+	printf '    "remote_modified": '; wrtbak_json_string "$(wrtbak_jsonfilter_value "$wrtbak_download_file" '@.remote_modified' "")"; printf ',\n'
+	printf '    "remote_etag": '; wrtbak_json_string "$(wrtbak_jsonfilter_value "$wrtbak_download_file" '@.remote_etag' "")"; printf ',\n'
+	printf '    "sha256": '; wrtbak_json_string "$(wrtbak_jsonfilter_value "$wrtbak_download_file" '@.sha256' "")"; printf '\n'
+	printf '  }'
+}
+
+wrtbak_firstboot_prepare_json() {
+	wrtbak_target=$1
+	wrtbak_remote_path=$2
+
+	case "$wrtbak_remote_path" in
+		*/devices/*/wrtbak/*/*.wrtbak|devices/*/wrtbak/*/*.wrtbak|*/devices/*/wrtbak/*/*.sysupgrade.tar.gz|devices/*/wrtbak/*/*.sysupgrade.tar.gz)
+			;;
+		*)
+			wrtbak_firstboot_error_json firstboot-prepare legacy_backup_read_only "legacy or cross-device backups are read-only in firstboot restore" "$wrtbak_remote_path"
+			return 1
+			;;
+	esac
+
+	wrtbak_download_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-download.XXXXXX") || return 1
+	wrtbak_prepare_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-prepare.XXXXXX") || {
+		rm -f "$wrtbak_download_tmp"
+		return 1
+	}
+	wrtbak_plan_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-plan.XXXXXX") || {
+		rm -f "$wrtbak_download_tmp" "$wrtbak_prepare_tmp"
+		return 1
+	}
+	wrtbak_download_view_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-download-view.XXXXXX") || {
+		rm -f "$wrtbak_download_tmp" "$wrtbak_prepare_tmp" "$wrtbak_plan_tmp"
+		return 1
+	}
+
+	if ! wrtbak_remote_download "$wrtbak_target" "$wrtbak_remote_path" 0 >"$wrtbak_download_tmp"; then
+		wrtbak_code=$(wrtbak_jsonfilter_value "$wrtbak_download_tmp" '@.code' "remote_download_failed")
+		wrtbak_message=$(wrtbak_jsonfilter_value "$wrtbak_download_tmp" '@.message' "remote download failed")
+		wrtbak_detail=$(wrtbak_jsonfilter_value "$wrtbak_download_tmp" '@.detail' "$wrtbak_remote_path")
+		rm -f "$wrtbak_download_tmp" "$wrtbak_prepare_tmp" "$wrtbak_plan_tmp" "$wrtbak_download_view_tmp"
+		wrtbak_firstboot_error_json firstboot-prepare "$wrtbak_code" "$wrtbak_message" "$wrtbak_detail"
+		return 1
+	fi
+
+	wrtbak_firstboot_download_result_json "$wrtbak_download_tmp" >"$wrtbak_download_view_tmp"
+	wrtbak_input=$(wrtbak_jsonfilter_value "$wrtbak_download_view_tmp" '@.path' "")
+	if [ -z "$wrtbak_input" ]; then
+		rm -f "$wrtbak_download_tmp" "$wrtbak_prepare_tmp" "$wrtbak_plan_tmp" "$wrtbak_download_view_tmp"
+		wrtbak_firstboot_error_json firstboot-prepare remote_download_failed "download result did not include a local path" "$wrtbak_remote_path"
+		return 1
+	fi
+	wrtbak_actual_input=$(wrtbak_root_path "$wrtbak_input")
+
+	if ! wrtbak_restore_prepare "$wrtbak_input" >"$wrtbak_prepare_tmp"; then
+		wrtbak_code=$(wrtbak_jsonfilter_value "$wrtbak_prepare_tmp" '@.code' "invalid_archive")
+		wrtbak_message=$(wrtbak_jsonfilter_value "$wrtbak_prepare_tmp" '@.message' "restore prepare failed")
+		rm -f "$wrtbak_download_tmp" "$wrtbak_prepare_tmp" "$wrtbak_plan_tmp" "$wrtbak_download_view_tmp"
+		wrtbak_firstboot_error_json firstboot-prepare "$wrtbak_code" "$wrtbak_message" "$wrtbak_input"
+		return 1
+	fi
+	if ! wrtbak_agent_restore_plan_json "$wrtbak_actual_input" >"$wrtbak_plan_tmp"; then
+		rm -f "$wrtbak_download_tmp" "$wrtbak_prepare_tmp" "$wrtbak_plan_tmp" "$wrtbak_download_view_tmp"
+		wrtbak_firstboot_error_json firstboot-prepare invalid_archive "restore plan failed" "$wrtbak_input"
+		return 1
+	fi
+
+	printf '{\n'
+	printf '  "ok": true,\n'
+	printf '  "operation": "firstboot-prepare",\n'
+	printf '  "download": '; cat "$wrtbak_download_view_tmp"; printf ',\n'
+	printf '  "prepare": '; cat "$wrtbak_prepare_tmp"; printf ',\n'
+	printf '  "plan": '; cat "$wrtbak_plan_tmp"; printf '\n'
+	printf '}\n'
+	rm -f "$wrtbak_download_tmp" "$wrtbak_prepare_tmp" "$wrtbak_plan_tmp" "$wrtbak_download_view_tmp"
+}
