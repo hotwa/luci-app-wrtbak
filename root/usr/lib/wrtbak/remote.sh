@@ -449,6 +449,17 @@ wrtbak_remote_list_emit_json() {
 	wrtbak_target=$1
 	wrtbak_driver=$2
 	wrtbak_tsv=$3
+	wrtbak_input_tsv=$wrtbak_tsv
+	wrtbak_sorted_tsv=$(mktemp "${TMPDIR:-/tmp}/wrtbak-remote-list-sort.XXXXXX" 2>/dev/null || printf '')
+	if [ -n "$wrtbak_sorted_tsv" ]; then
+		wrtbak_tab=$(printf '\t')
+		if sort -t "$wrtbak_tab" -k6,6 -k5,5r -k1,1r "$wrtbak_tsv" >"$wrtbak_sorted_tsv"; then
+			wrtbak_input_tsv=$wrtbak_sorted_tsv
+		else
+			rm -f "$wrtbak_sorted_tsv"
+		fi
+	fi
+
 	printf '{\n'
 	printf '  "ok": true,\n'
 	printf '  "operation": "remote-list",\n'
@@ -486,10 +497,11 @@ wrtbak_remote_list_emit_json() {
 			printf '\n'
 		fi
 		printf '    }'
-	done < "$wrtbak_tsv"
+	done < "$wrtbak_input_tsv"
 	printf '\n'
 	printf '  ]\n'
 	printf '}\n'
+	[ "$wrtbak_input_tsv" = "$wrtbak_tsv" ] || rm -f "$wrtbak_input_tsv"
 }
 
 wrtbak_remote_list() {

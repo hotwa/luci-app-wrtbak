@@ -10,6 +10,7 @@ libdir="$repo_dir/root/usr/lib/wrtbak"
 cli="$repo_dir/root/usr/bin/wrtbak"
 current_uid="jdcloud-re-ss-01-14c4a35ee8"
 current_remote="openwrt-config-backup/wrtbak/devices/$current_uid/wrtbak/2026/current.wrtbak"
+older_remote="openwrt-config-backup/wrtbak/devices/$current_uid/wrtbak/2026/older.wrtbak"
 legacy_remote="openwrt-config-backup/wrtbak/wrtbak/office-re-ss-01-test/wrtbak/2026/legacy.wrtbak"
 archive_file="$work_dir/current.wrtbak"
 rclone_log="$work_dir/rclone.log"
@@ -110,6 +111,12 @@ JSON
 			*wrtbak_remote:knowledge/openwrt-config-backup/wrtbak/devices/$current_uid)
 				cat <<'JSON'
 [
+  {
+    "Path": "$older_remote",
+    "Name": "older.wrtbak",
+    "Size": 111,
+    "ModTime": "2026-06-30T12:00:00Z"
+  },
   {
     "Path": "$current_remote",
     "Name": "current.wrtbak",
@@ -229,18 +236,20 @@ run_cli() {
 }
 
 run_cli firstboot-candidates --target s3 --json >"$work_dir/candidates.json"
-python3 - "$work_dir/candidates.json" "$current_remote" "$legacy_remote" <<'PY'
+python3 - "$work_dir/candidates.json" "$current_remote" "$older_remote" "$legacy_remote" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     data = json.load(handle)
-current_remote, legacy_remote = sys.argv[2], sys.argv[3]
+current_remote, older_remote, legacy_remote = sys.argv[2], sys.argv[3], sys.argv[4]
 
 assert data["ok"] is True, data
 assert data["operation"] == "firstboot-candidates", data
 assert data["identity"]["uid"] == "jdcloud-re-ss-01-14c4a35ee8", data
 backups = data["remote"]["backups"]
+assert backups[0]["path"] == current_remote, data
+assert backups[1]["path"] == older_remote, data
 assert any(item["path"] == current_remote and item.get("legacy") is not True for item in backups), data
 assert any(item["path"] == legacy_remote and item.get("legacy") is True for item in backups), data
 assert data["write_policy"] == "current_device_only", data
