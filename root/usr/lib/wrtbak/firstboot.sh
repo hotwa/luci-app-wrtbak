@@ -53,7 +53,7 @@ wrtbak_firstboot_local_url() {
 wrtbak_firstboot_qr_svg() {
 	wrtbak_url=$1
 	if command -v qrencode >/dev/null 2>&1; then
-		qrencode -t SVG -o - "$wrtbak_url" 2>/dev/null | tr '\n' ' '
+		qrencode -t SVG -o - "$wrtbak_url" 2>/dev/null | tr '\r\n\t' '   '
 		return 0
 	fi
 	return 1

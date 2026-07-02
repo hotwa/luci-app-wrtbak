@@ -81,7 +81,7 @@ while [ "$#" -gt 0 ]; do
 			;;
 	esac
 done
-printf '<svg xmlns="http://www.w3.org/2000/svg"><title>%s</title><path d="M0 0h1v1z"/></svg>\n' "$url"
+printf '<svg xmlns="http://www.w3.org/2000/svg">\n\t<title>%s</title>\n\t<path d="M0 0h1v1z"/>\n</svg>\n' "$url"
 EOT
 chmod +x "$bin_dir/qrencode"
 
@@ -154,6 +154,8 @@ assert data["remote"]["default_target"] == "s3", data
 assert data["remote"]["targets"]["s3"]["enabled"] is True, data
 assert data["local_url"] == "http://192.168.11.234/cgi-bin/luci/admin/system/wrtbak", data
 assert data["qr_svg"].startswith("<svg "), data
+assert "\t" not in data["qr_svg"], data
+assert "\n" not in data["qr_svg"], data
 assert data["done_marker"]["exists"] is False, data
 assert data["blocked_reasons"] == [], data
 
