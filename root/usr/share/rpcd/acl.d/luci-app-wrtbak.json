@@ -48,6 +48,15 @@
 				"/usr/bin/wrtbak firstboot-prepare *": [
 					"exec"
 				],
+				"/usr/bin/wrtbak proxy-status --json": [
+					"exec"
+				],
+				"/usr/bin/wrtbak proxy-candidates *": [
+					"exec"
+				],
+				"/usr/bin/wrtbak proxy-prepare *": [
+					"exec"
+				],
 				"/usr/bin/wrtbak firstboot-complete --json": [
 					"exec"
 				]
@@ -97,6 +106,9 @@
 					"exec"
 				],
 				"/usr/bin/wrtbak firstboot-apply *": [
+					"exec"
+				],
+				"/usr/bin/wrtbak proxy-apply *": [
 					"exec"
 				],
 				"/usr/bin/wrtbak schedule-apply --json": [

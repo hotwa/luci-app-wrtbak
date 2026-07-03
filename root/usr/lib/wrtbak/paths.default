@@ -3,6 +3,9 @@
 /etc/config/network
 /etc/config/dhcp
 /etc/config/firewall
+/etc/firewall.user
+/etc/nftables.d
+/etc/hotplug.d/firewall
 /etc/config/wireless
 
 # DDNS Go
@@ -15,6 +18,12 @@
 /etc/config/nikki
 /etc/nikki
 /etc/nikki/config.yaml
+
+# DAE / Daed
+/etc/config/dae
+/etc/config/daed
+/etc/dae
+/etc/daed
 
 # Tailscale
 /etc/config/tailscale

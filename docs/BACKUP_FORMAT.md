@@ -14,6 +14,11 @@ Required top-level entries:
 
 Files below `rootfs/` map to absolute OpenWrt filesystem paths during restore. For example, `rootfs/etc/config/network` represents `/etc/config/network` on the target device.
 
+Default `items=all` backups include standard UCI firewall state through
+`/etc/config/firewall` and custom firewall extensions through
+`/etc/firewall.user`, `/etc/nftables.d`, and `/etc/hotplug.d/firewall` when
+those paths exist on the source router.
+
 ### Tar Entry Rules
 
 All `.wrtbak` tar member names MUST be relative, normalized POSIX paths.

@@ -1,6 +1,6 @@
 #!/bin/sh
 
-WRTBAK_VERSION="0.1.0"
+WRTBAK_VERSION="0.3.6"
 : "${WRTBAK_ROOT:=/}"
 : "${WRTBAK_LIBDIR:=/usr/lib/wrtbak}"
 

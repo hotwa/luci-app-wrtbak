@@ -76,7 +76,7 @@ status_path, fixture_root, libdir, output_dir = sys.argv[1:]
 with open(status_path, encoding="utf-8") as handle:
     data = json.load(handle)
 
-assert data["tool_version"] == "0.1.0"
+assert data["tool_version"] == "0.3.6"
 assert data["root"] == fixture_root
 assert data["libdir"] == libdir
 assert data["package_manager"] == "apk"

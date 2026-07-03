@@ -297,12 +297,20 @@ return view.extend({
 			runWrtbak([ 'detect', '--json' ]),
 			runWrtbak([ 'remote-status', '--json' ]),
 			runWrtbak([ 'firstboot-status', '--json' ]),
+			runWrtbak([ 'proxy-status', '--json' ]).catch(function(err) {
+				return {
+					ok: false,
+					enabled: false,
+					error: (err && err.message) || String(err)
+				};
+			}),
 			uci.load('wrtbak')
 		]).then(function(results) {
 			return {
 				detect: results[0],
 				remote: results[1],
-				firstboot: results[2]
+				firstboot: results[2],
+				proxy: results[3]
 			};
 		});
 	},
@@ -311,6 +319,7 @@ return view.extend({
 		var items = Array.isArray(data.detect.items) ? data.detect.items : [];
 		var remoteStatus = data.remote || {};
 		var schedule = remoteStatus.schedule || {};
+		var proxyArtifacts = data.proxy || {};
 		var profile = E('input', {
 			id: 'wrtbak-profile',
 			name: 'wrtbak_profile',
@@ -378,6 +387,10 @@ return view.extend({
 		var firstbootPlanPanel = E('div', { 'class': 'wrtbak-firstboot-plan' });
 		var firstbootConfirmInput = textInput('wrtbak-firstboot-confirmation', '');
 		firstbootConfirmInput.className += ' wrtbak-firstboot-confirm';
+		var proxyState = { phase: 'idle', proxy: 'nikki', candidates: null, selected: null, prepare: null, apply: null, error: null };
+		var proxyPanel = E('div', { 'class': 'cbi-section wrtbak-proxy-panel' });
+		var proxyCandidatesPanel = E('div', { 'class': 'wrtbak-proxy-candidates' });
+		var proxyPlanPanel = E('div', { 'class': 'wrtbak-proxy-plan' });
 		var prebackupButton;
 		var applyButton;
 		var applyAllButton;
@@ -386,6 +399,10 @@ return view.extend({
 		var firstbootListButton;
 		var firstbootPrebackupButton;
 		var firstbootApplyButton;
+		var proxyNikkiButton;
+		var proxyDaeButton;
+		var proxyApplyButton;
+		var proxyResetButton;
 		var previousButton;
 		var nextButton;
 		var table = E('table', { 'class': 'table' }, [
@@ -945,6 +962,234 @@ return view.extend({
 			}).catch(failFirstboot);
 		}
 
+		function proxyReasonLabel(reason) {
+			switch (reason) {
+			case 'health_check_failed':
+				return 'health_check_failed';
+			case 'service_stopped':
+				return 'service_stopped';
+			case 'no_candidates':
+				return 'no_candidates';
+			case 'disabled':
+				return 'disabled';
+			case 'checksum_mismatch':
+				return 'checksum_mismatch';
+			default:
+				return reason || '-';
+			}
+		}
+
+		function resetProxyState() {
+			proxyState.phase = 'idle';
+			proxyState.candidates = null;
+			proxyState.selected = null;
+			proxyState.prepare = null;
+			proxyState.apply = null;
+			proxyState.error = null;
+			renderProxyPanel();
+		}
+
+		function failProxy(err) {
+			var data = err && err.data ? err.data : null;
+			proxyState.apply = data && data.operation === 'proxy-apply' ? data : proxyState.apply;
+			proxyState.error = data ? proxyReasonLabel(data.code || data.message) : ((err && err.message) || String(err));
+			proxyState.phase = 'failed';
+			renderProxyPanel();
+			ui.addNotification(null, E('p', {}, proxyState.error), 'danger');
+		}
+
+		function selectProxyCandidate(candidate) {
+			proxyState.selected = candidate;
+			proxyState.prepare = null;
+			proxyState.apply = null;
+			proxyState.error = null;
+			proxyState.phase = 'selected';
+			renderProxyPanel();
+		}
+
+		function scanProxyCandidates(proxy) {
+			proxyState.phase = 'listing';
+			proxyState.proxy = proxy;
+			proxyState.candidates = null;
+			proxyState.selected = null;
+			proxyState.prepare = null;
+			proxyState.apply = null;
+			proxyState.error = null;
+			renderProxyPanel();
+
+			return saveConfig().then(function() {
+				return runWrtbak([ 'proxy-candidates', '--target', selectedTarget(), '--proxy', proxy, '--json' ]);
+			}).then(function(result) {
+				proxyState.candidates = result;
+				proxyState.selected = result.selected || null;
+				proxyState.phase = proxyState.selected ? 'selected' : 'candidates';
+				renderProxyPanel();
+				ui.addNotification(null, E('p', {}, _('Proxy artifacts loaded.')), 'info');
+			}).catch(failProxy);
+		}
+
+		function applyProxyArtifact() {
+			var selected = proxyState.selected;
+
+			if (!selected || !selected.manifest_path)
+				return Promise.resolve();
+
+			proxyState.phase = 'preparing';
+			proxyState.prepare = null;
+			proxyState.apply = null;
+			proxyState.error = null;
+			renderProxyPanel();
+
+			return runWrtbak([ 'proxy-prepare', '--target', selectedTarget(), '--proxy', proxyState.proxy, '--path', selected.manifest_path, '--json' ]).then(function(prepared) {
+				proxyState.prepare = prepared;
+				proxyState.phase = 'applying';
+				renderProxyPanel();
+				return runWrtbak([ 'proxy-apply', '--proxy', proxyState.proxy, '--input', prepared.artifact.local_path, '--manifest', prepared.manifest.local_path, '--confirm', 'APPLY', '--json' ]);
+			}).then(function(result) {
+				proxyState.apply = result;
+				proxyState.phase = 'applied';
+				renderProxyPanel();
+				ui.addNotification(null, E('p', {}, _('Proxy artifact applied.')), 'info');
+			}).catch(failProxy);
+		}
+
+		function renderProxyCandidates() {
+			var result = proxyState.candidates;
+			var candidates = result && Array.isArray(result.candidates) ? result.candidates : [];
+			var selected = proxyState.selected;
+			var table;
+
+			if (!result) {
+				replaceChildren(proxyCandidatesPanel, E('p', {}, _('Scan cloud proxy artifacts to compare device, site, and shared profiles.')));
+				return;
+			}
+
+			table = E('table', { 'class': 'table' }, [
+				E('tr', { 'class': 'tr table-titles' }, [
+					E('th', { 'class': 'th' }, _('Scope')),
+					E('th', { 'class': 'th' }, _('Manifest')),
+					E('th', { 'class': 'th' }, _('SHA256')),
+					E('th', { 'class': 'th right' }, _('Action'))
+				])
+			]);
+
+			if (!candidates.length) {
+				table.appendChild(E('tr', { 'class': 'tr' }, [
+					E('td', { 'class': 'td', colspan: 4 }, E('em', {}, _('No proxy artifacts')))
+				]));
+			}
+
+			candidates.forEach(function(candidate) {
+				var isSelected = selected && selected.manifest_path === candidate.manifest_path;
+				table.appendChild(E('tr', { 'class': 'tr' }, [
+					E('td', { 'class': 'td' }, [
+						E('span', { 'class': isSelected ? 'cbi-tag cbi-tag-success' : 'cbi-tag' }, candidate.scope || '-')
+					]),
+					E('td', { 'class': 'td' }, E('code', {}, candidate.manifest_path || '-')),
+					E('td', { 'class': 'td' }, E('code', {}, candidate.sha256 || '-')),
+					E('td', { 'class': 'td right' }, E('button', {
+						type: 'button',
+						'class': 'btn cbi-button',
+						click: function() { selectProxyCandidate(candidate); }
+					}, isSelected ? _('Selected') : _('Select')))
+				]));
+			});
+
+			replaceChildren(proxyCandidatesPanel, [
+				E('p', {}, [
+					E('strong', {}, _('Priority')),
+					': ',
+					result.selected ? result.selected.scope : '-'
+				]),
+				table
+			]);
+		}
+
+		function renderProxyPlan() {
+			var selected = proxyState.selected;
+			var apply = proxyState.apply || {};
+			var rollback = apply.rollback || {};
+
+			proxyPlanPanel.innerHTML = '';
+			proxyPlanPanel.appendChild(E('h4', {}, _('Proxy update review')));
+			proxyPlanPanel.appendChild(E('p', {}, [
+				E('strong', {}, _('Status')),
+				': ',
+				proxyState.phase
+			]));
+
+			if (selected) {
+				proxyPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Selected')),
+					': ',
+					selected.scope,
+					' / ',
+					E('code', {}, selected.manifest_path || '-')
+				]));
+				proxyPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Update')),
+					': ',
+					statusTag(selected.update_available !== false, selected.update_available === false ? _('Already current') : _('Available'))
+				]));
+			}
+
+			if (proxyState.prepare)
+				proxyPlanPanel.appendChild(jsonBlock(proxyState.prepare));
+
+			if (proxyState.apply) {
+				proxyPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Health')),
+					': ',
+					statusTag(apply.health && apply.health.ok === true, apply.health && apply.health.ok === true ? _('OK') : proxyReasonLabel(apply.code || (apply.health && apply.health.reason)))
+				]));
+				if (rollback.action)
+					proxyPlanPanel.appendChild(E('p', {}, [
+						E('strong', {}, _('Rollback')),
+						': ',
+						proxyReasonLabel(rollback.action)
+					]));
+				proxyPlanPanel.appendChild(jsonBlock(proxyState.apply));
+			}
+
+			if (proxyState.error)
+				proxyPlanPanel.appendChild(E('div', { 'class': 'alert-message danger' }, proxyState.error));
+
+			proxyPlanPanel.appendChild(E('div', { 'class': 'cbi-page-actions' }, [
+				proxyApplyButton,
+				' ',
+				proxyResetButton
+			]));
+
+			if (proxyApplyButton)
+				proxyApplyButton.disabled = !selected || proxyState.phase === 'preparing' || proxyState.phase === 'applying';
+		}
+
+		function renderProxyPanel() {
+			replaceChildren(proxyPanel, [
+				E('h3', {}, _('Cloud proxy artifacts')),
+				E('p', {}, [
+					statusTag(proxyArtifacts.enabled === true, proxyArtifacts.enabled === true ? _('Enabled') : _('Disabled')),
+					' ',
+					E('strong', {}, _('Mode')),
+					': ',
+					proxyArtifacts.mode || '-',
+					' ',
+					E('strong', {}, _('Site')),
+					': ',
+					proxyArtifacts.site || '-'
+				]),
+				E('div', { 'class': 'cbi-page-actions' }, [
+					proxyNikkiButton,
+					' ',
+					proxyDaeButton
+				]),
+				proxyCandidatesPanel,
+				proxyPlanPanel
+			]);
+			renderProxyCandidates();
+			renderProxyPlan();
+		}
+
 		function renderRestorePanel() {
 			restorePanel.innerHTML = '';
 			restorePanel.appendChild(E('h3', {}, _('Restore review')));
@@ -1306,9 +1551,38 @@ return view.extend({
 			click: ui.createHandlerFn(this, firstbootApplyRestore)
 		}, _('Apply firstboot restore'));
 
+		proxyNikkiButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-action',
+			click: ui.createHandlerFn(this, function() {
+				return scanProxyCandidates('nikki');
+			})
+		}, _('Scan Nikki artifact'));
+
+		proxyDaeButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button',
+			click: ui.createHandlerFn(this, function() {
+				return scanProxyCandidates('dae');
+			})
+		}, _('Scan DAE artifact'));
+
+		proxyApplyButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-positive',
+			click: ui.createHandlerFn(this, applyProxyArtifact)
+		}, _('Apply proxy artifact'));
+
+		proxyResetButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button',
+			click: ui.createHandlerFn(this, resetProxyState)
+		}, _('Reset proxy review'));
+
 		var page = E('div', { 'class': 'wrtbak-page' }, [
 			E('h2', {}, _('Wrtbak')),
 			firstbootPanel,
+			proxyPanel,
 			E('div', { 'class': 'cbi-section' }, [
 				field('wrtbak-profile', _('Profile'), profile),
 				field('wrtbak-format', _('Archive'), format),
@@ -1364,6 +1638,7 @@ return view.extend({
 		updatePagination(rows, pagination, pageSize, pageSummary, previousButton, nextButton);
 		renderBackupRows(remoteTable, [], function() {}, function() {});
 		renderFirstbootPanel();
+		renderProxyPanel();
 		renderRestorePanel();
 
 		return page;

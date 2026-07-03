@@ -277,7 +277,7 @@ assert data["schema"] == "wrtbak/v1"
 assert data["profile"] == "restore-plan"
 assert data["backup_id"].startswith("restore-plan-")
 assert data["created_at"].endswith("Z")
-assert data["tool_version"] == "0.1.0"
+assert data["tool_version"] == "0.3.6"
 assert data["file_count"] == 2
 assert data["directory_count"] >= 2
 assert data["total_file_bytes"] > 0
