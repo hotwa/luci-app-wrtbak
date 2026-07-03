@@ -242,7 +242,7 @@ wrtbak_firstboot_candidates_json() {
 		wrtbak_firstboot_error_json firstboot-candidates identity_unusable "current device identity is unusable" ""
 		return 1
 	fi
-	if ! wrtbak_remote_list "$wrtbak_target" >"$wrtbak_remote_tmp"; then
+	if ! WRTBAK_S3_FORCE_DIRECT=1 wrtbak_remote_list "$wrtbak_target" >"$wrtbak_remote_tmp"; then
 		wrtbak_code=$(wrtbak_jsonfilter_value "$wrtbak_remote_tmp" '@.code' "remote_unreachable")
 		wrtbak_message=$(wrtbak_jsonfilter_value "$wrtbak_remote_tmp" '@.message' "remote listing failed")
 		wrtbak_detail=$(wrtbak_jsonfilter_value "$wrtbak_remote_tmp" '@.detail' "")
@@ -313,7 +313,7 @@ wrtbak_firstboot_prepare_json() {
 		return 1
 	}
 
-	if ! wrtbak_remote_download "$wrtbak_target" "$wrtbak_remote_path" 0 >"$wrtbak_download_tmp"; then
+	if ! WRTBAK_S3_FORCE_DIRECT=1 wrtbak_remote_download "$wrtbak_target" "$wrtbak_remote_path" 0 >"$wrtbak_download_tmp"; then
 		wrtbak_code=$(wrtbak_jsonfilter_value "$wrtbak_download_tmp" '@.code' "remote_download_failed")
 		wrtbak_message=$(wrtbak_jsonfilter_value "$wrtbak_download_tmp" '@.message' "remote download failed")
 		wrtbak_detail=$(wrtbak_jsonfilter_value "$wrtbak_download_tmp" '@.detail' "$wrtbak_remote_path")

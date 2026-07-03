@@ -32,7 +32,14 @@ wrtbak_s3_make_config() {
 wrtbak_s3_rclone() {
 	wrtbak_config=$1
 	shift
-	wrtbak_proxy_url=$(wrtbak_main_option proxy_url "")
+	case "${WRTBAK_S3_FORCE_DIRECT:-0}" in
+		1|true|yes|on|direct)
+			wrtbak_proxy_url=
+			;;
+		*)
+			wrtbak_proxy_url=$(wrtbak_main_option proxy_url "")
+			;;
+	esac
 	if [ -n "$wrtbak_proxy_url" ]; then
 		HTTP_PROXY="$wrtbak_proxy_url" HTTPS_PROXY="$wrtbak_proxy_url" ALL_PROXY="$wrtbak_proxy_url" \
 		http_proxy="$wrtbak_proxy_url" https_proxy="$wrtbak_proxy_url" all_proxy="$wrtbak_proxy_url" \

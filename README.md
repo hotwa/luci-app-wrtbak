@@ -23,6 +23,8 @@ Current capabilities:
 - Apply cron-based automatic backups using the selected remote target.
 - Download remote backups into a local restore cache, review restore plans, create mandatory pre-restore backups, and apply confirmed `.wrtbak` restores.
 - Preflight or execute native `.sysupgrade.tar.gz` restores through OpenWrt `sysupgrade -r` after confirmation.
+- On first boot after a factory reset, list and download R2 restore candidates without using the local transparent proxy. This keeps cloud restore usable before Nikki/DAE has been restored.
+- Review, apply, health-check, and roll back cloud-published Nikki/DAE proxy artifacts such as `final.yaml` and `final.dae`.
 
 ## Security Warning
 

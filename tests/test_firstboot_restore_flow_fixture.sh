@@ -55,6 +55,7 @@ config wrtbak 'main'
 	option enabled '1'
 	option default_target 's3'
 	option device_alias 'office-re-ss-01-test'
+	option proxy_url 'http://127.0.0.1:7890'
 
 config remote 's3'
 	option enabled '1'
@@ -83,6 +84,10 @@ archive_size=$(wc -c < "$archive_file" | awk '{ print $1 }')
 cat >"$bin_dir/rclone" <<EOT
 #!/bin/sh
 printf '%s\\n' "\$*" >> "$rclone_log"
+if [ "\${WRTBAK_FAKE_FAIL_ON_PROXY:-0}" = "1" ] && [ -n "\${HTTP_PROXY:-}" ]; then
+	printf 'firstboot must not use proxy during bootstrap: %s\\n' "\$HTTP_PROXY" >&2
+	exit 77
+fi
 if [ "\$1" = "--config" ]; then
 	shift 2
 fi
@@ -232,10 +237,11 @@ run_cli() {
 	PATH="$bin_dir:$PATH" \
 	WRTBAK_ROOT="$fixture_root" \
 	WRTBAK_LIBDIR="$libdir" \
+	WRTBAK_FAKE_FAIL_ON_PROXY="${WRTBAK_FAKE_FAIL_ON_PROXY:-0}" \
 		"$cli" "$@"
 }
 
-run_cli firstboot-candidates --target s3 --json >"$work_dir/candidates.json"
+WRTBAK_FAKE_FAIL_ON_PROXY=1 run_cli firstboot-candidates --target s3 --json >"$work_dir/candidates.json"
 python3 - "$work_dir/candidates.json" "$current_remote" "$older_remote" "$legacy_remote" <<'PY'
 import json
 import sys
@@ -255,7 +261,7 @@ assert any(item["path"] == legacy_remote and item.get("legacy") is True for item
 assert data["write_policy"] == "current_device_only", data
 PY
 
-run_cli firstboot-prepare --target s3 --path "$current_remote" --json >"$work_dir/prepare.json"
+WRTBAK_FAKE_FAIL_ON_PROXY=1 run_cli firstboot-prepare --target s3 --path "$current_remote" --json >"$work_dir/prepare.json"
 python3 - "$work_dir/prepare.json" "$current_remote" <<'PY'
 import json
 import sys
