@@ -138,6 +138,41 @@ ssh root@192.168.11.234 \
 
 After restoring network, wireless, Dropbear, Tailscale, WireGuard, DNS, or proxy configuration, prefer a full reboot unless the operator explicitly asks for a service-only restart. Network-related restores can interrupt SSH, LuCI, and tailnet connectivity.
 
+## Firstboot Auto Restore
+
+Automatic firstboot restore is disabled by default and should only be enabled
+in owner-approved private firmware builds or by explicit UCI configuration:
+
+```sh
+uci set wrtbak.main.firstboot_auto_enabled='1'
+uci set wrtbak.main.firstboot_auto_target='s3'
+uci commit wrtbak
+/etc/init.d/wrtbak-firstboot-auto enable
+```
+
+The safe one-shot command is:
+
+```sh
+wrtbak firstboot-auto --target s3 --json
+```
+
+It will skip without writing configuration when auto restore is disabled, the
+current device already has a matching done marker, network readiness is
+incomplete, or no canonical current-device backup exists. When it applies a
+restore, it creates a pre-restore `.wrtbak`, restores the selected current
+device backup, writes `/root/wrtbak/firstboot/done.json`, and reports
+`"reboot_recommended": true`.
+
+The init script logs attempts to:
+
+```text
+/root/wrtbak/firstboot/auto.log
+```
+
+Maintenance agents should inspect this log and `wrtbak firstboot-complete
+--json` after a factory-reset validation before assuming the router recovered
+itself.
+
 ## Agent Rules
 
 - Run `doctor --json` before creating archives.

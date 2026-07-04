@@ -354,6 +354,174 @@ wrtbak_firstboot_prepare_json() {
 	rm -f "$wrtbak_download_tmp" "$wrtbak_prepare_tmp" "$wrtbak_plan_tmp" "$wrtbak_download_view_tmp"
 }
 
+wrtbak_firstboot_auto_skip_json() {
+	wrtbak_reason=$1
+	wrtbak_detail=${2:-}
+	wrtbak_auto_enabled=${3:-false}
+
+	printf '{\n'
+	printf '  "ok": true,\n'
+	printf '  "operation": "firstboot-auto",\n'
+	printf '  "auto_enabled": '; wrtbak_json_bool "$wrtbak_auto_enabled"; printf ',\n'
+	printf '  "applied": false,\n'
+	printf '  "reason": '; wrtbak_json_string "$wrtbak_reason"; printf ',\n'
+	printf '  "detail": '; wrtbak_json_string "$wrtbak_detail"; printf ',\n'
+	printf '  "reboot_recommended": false\n'
+	printf '}\n'
+}
+
+wrtbak_firstboot_auto_candidate_path() {
+	wrtbak_candidates_file=$1
+	wrtbak_current_uid=$2
+
+	jsonfilter -i "$wrtbak_candidates_file" -e '@.remote.backups[*].path' 2>/dev/null |
+	while IFS= read -r wrtbak_path; do
+		case "$wrtbak_path" in
+			*/devices/"$wrtbak_current_uid"/wrtbak/*/*.wrtbak|devices/"$wrtbak_current_uid"/wrtbak/*/*.wrtbak)
+				printf '%s\n' "$wrtbak_path"
+				return 0
+				;;
+		esac
+	done
+}
+
+wrtbak_firstboot_auto_json() {
+	wrtbak_target=$1
+	[ -n "$wrtbak_target" ] || wrtbak_target=$(wrtbak_main_option firstboot_auto_target default)
+	[ -n "$wrtbak_target" ] || wrtbak_target=default
+
+	wrtbak_auto_enabled=$(wrtbak_main_option firstboot_auto_enabled 0)
+	if ! wrtbak_bool_enabled "$wrtbak_auto_enabled"; then
+		wrtbak_firstboot_auto_skip_json disabled "firstboot_auto_enabled is not enabled" false
+		return 0
+	fi
+
+	wrtbak_identity_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-auto-identity.XXXXXX") || return 1
+	wrtbak_done_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-auto-done.XXXXXX") || {
+		rm -f "$wrtbak_identity_tmp"
+		return 1
+	}
+	wrtbak_network_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-auto-network.XXXXXX") || {
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp"
+		return 1
+	}
+	wrtbak_candidates_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-auto-candidates.XXXXXX") || {
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp"
+		return 1
+	}
+	wrtbak_prepare_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-auto-prepare.XXXXXX") || {
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp" "$wrtbak_candidates_tmp"
+		return 1
+	}
+	wrtbak_prebackup_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-auto-prebackup.XXXXXX") || {
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp" "$wrtbak_candidates_tmp" "$wrtbak_prepare_tmp"
+		return 1
+	}
+	wrtbak_apply_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-firstboot-auto-apply.XXXXXX") || {
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp" "$wrtbak_candidates_tmp" "$wrtbak_prepare_tmp" "$wrtbak_prebackup_tmp"
+		return 1
+	}
+
+	if ! wrtbak_identity_current_json >"$wrtbak_identity_tmp"; then
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp" "$wrtbak_candidates_tmp" "$wrtbak_prepare_tmp" "$wrtbak_prebackup_tmp" "$wrtbak_apply_tmp"
+		wrtbak_firstboot_error_json firstboot-auto identity_unusable "current device identity is unusable" ""
+		return 1
+	fi
+	wrtbak_current_uid=$(wrtbak_jsonfilter_value "$wrtbak_identity_tmp" '@.uid' "")
+	if [ -z "$wrtbak_current_uid" ]; then
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp" "$wrtbak_candidates_tmp" "$wrtbak_prepare_tmp" "$wrtbak_prebackup_tmp" "$wrtbak_apply_tmp"
+		wrtbak_firstboot_error_json firstboot-auto identity_unusable "current device UID is missing" ""
+		return 1
+	fi
+
+	wrtbak_firstboot_done_marker_json "$wrtbak_current_uid" >"$wrtbak_done_tmp"
+	wrtbak_done_status=$(wrtbak_jsonfilter_value "$wrtbak_done_tmp" '@.status' "missing")
+	if [ "$wrtbak_done_status" = "ok" ]; then
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp" "$wrtbak_candidates_tmp" "$wrtbak_prepare_tmp" "$wrtbak_prebackup_tmp" "$wrtbak_apply_tmp"
+		wrtbak_firstboot_auto_skip_json already_done "firstboot done marker already matches this device" true
+		return 0
+	fi
+
+	wrtbak_firstboot_network_json >"$wrtbak_network_tmp"
+	wrtbak_default_route=$(wrtbak_jsonfilter_value "$wrtbak_network_tmp" '@.default_route' "false")
+	wrtbak_dns=$(wrtbak_jsonfilter_value "$wrtbak_network_tmp" '@.dns' "false")
+	wrtbak_time=$(wrtbak_jsonfilter_value "$wrtbak_network_tmp" '@.time' "false")
+	if [ "$wrtbak_default_route" != "true" ] || [ "$wrtbak_dns" != "true" ] || [ "$wrtbak_time" != "true" ]; then
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp" "$wrtbak_candidates_tmp" "$wrtbak_prepare_tmp" "$wrtbak_prebackup_tmp" "$wrtbak_apply_tmp"
+		wrtbak_firstboot_auto_skip_json network_not_ready "default_route=$wrtbak_default_route dns=$wrtbak_dns time=$wrtbak_time" true
+		return 0
+	fi
+
+	if ! ( wrtbak_firstboot_candidates_json "$wrtbak_target" ) >"$wrtbak_candidates_tmp"; then
+		wrtbak_code=$(wrtbak_jsonfilter_value "$wrtbak_candidates_tmp" '@.code' "candidate_lookup_failed")
+		wrtbak_message=$(wrtbak_jsonfilter_value "$wrtbak_candidates_tmp" '@.message' "candidate lookup failed")
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp" "$wrtbak_candidates_tmp" "$wrtbak_prepare_tmp" "$wrtbak_prebackup_tmp" "$wrtbak_apply_tmp"
+		wrtbak_firstboot_error_json firstboot-auto "$wrtbak_code" "$wrtbak_message" "$wrtbak_target"
+		return 1
+	fi
+	wrtbak_selected_path=$(wrtbak_firstboot_auto_candidate_path "$wrtbak_candidates_tmp" "$wrtbak_current_uid" | sed -n '1p')
+	if [ -z "$wrtbak_selected_path" ]; then
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp" "$wrtbak_candidates_tmp" "$wrtbak_prepare_tmp" "$wrtbak_prebackup_tmp" "$wrtbak_apply_tmp"
+		wrtbak_firstboot_auto_skip_json no_current_device_backup "no canonical current-device .wrtbak backup was found" true
+		return 0
+	fi
+
+	if ! ( wrtbak_firstboot_prepare_json "$wrtbak_target" "$wrtbak_selected_path" ) >"$wrtbak_prepare_tmp"; then
+		wrtbak_code=$(wrtbak_jsonfilter_value "$wrtbak_prepare_tmp" '@.code' "prepare_failed")
+		wrtbak_message=$(wrtbak_jsonfilter_value "$wrtbak_prepare_tmp" '@.message' "firstboot prepare failed")
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp" "$wrtbak_candidates_tmp" "$wrtbak_prepare_tmp" "$wrtbak_prebackup_tmp" "$wrtbak_apply_tmp"
+		wrtbak_firstboot_error_json firstboot-auto "$wrtbak_code" "$wrtbak_message" "$wrtbak_selected_path"
+		return 1
+	fi
+	wrtbak_prepare_input=$(wrtbak_jsonfilter_value "$wrtbak_prepare_tmp" '@.download.path' "")
+	if [ -z "$wrtbak_prepare_input" ]; then
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp" "$wrtbak_candidates_tmp" "$wrtbak_prepare_tmp" "$wrtbak_prebackup_tmp" "$wrtbak_apply_tmp"
+		wrtbak_firstboot_error_json firstboot-auto prepare_failed "firstboot prepare did not return an input path" "$wrtbak_selected_path"
+		return 1
+	fi
+
+	if ! ( wrtbak_restore_prebackup pre-restore all wrtbak 0 "$wrtbak_target" "$wrtbak_selected_path" ) >"$wrtbak_prebackup_tmp"; then
+		wrtbak_code=$(wrtbak_jsonfilter_value "$wrtbak_prebackup_tmp" '@.code' "prebackup_failed")
+		wrtbak_message=$(wrtbak_jsonfilter_value "$wrtbak_prebackup_tmp" '@.message' "prebackup failed")
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp" "$wrtbak_candidates_tmp" "$wrtbak_prepare_tmp" "$wrtbak_prebackup_tmp" "$wrtbak_apply_tmp"
+		wrtbak_firstboot_error_json firstboot-auto "$wrtbak_code" "$wrtbak_message" "$wrtbak_selected_path"
+		return 1
+	fi
+	wrtbak_prebackup_path=$(wrtbak_jsonfilter_value "$wrtbak_prebackup_tmp" '@.path' "")
+	if [ -z "$wrtbak_prebackup_path" ]; then
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp" "$wrtbak_candidates_tmp" "$wrtbak_prepare_tmp" "$wrtbak_prebackup_tmp" "$wrtbak_apply_tmp"
+		wrtbak_firstboot_error_json firstboot-auto prebackup_failed "prebackup did not return a local path" "$wrtbak_selected_path"
+		return 1
+	fi
+
+	if ! ( wrtbak_firstboot_apply_json "$wrtbak_prepare_input" "$wrtbak_prebackup_path" RESTORE ) >"$wrtbak_apply_tmp"; then
+		wrtbak_code=$(wrtbak_jsonfilter_value "$wrtbak_apply_tmp" '@.code' "apply_failed")
+		wrtbak_message=$(wrtbak_jsonfilter_value "$wrtbak_apply_tmp" '@.message' "firstboot apply failed")
+		rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp" "$wrtbak_candidates_tmp" "$wrtbak_prepare_tmp" "$wrtbak_prebackup_tmp" "$wrtbak_apply_tmp"
+		wrtbak_firstboot_error_json firstboot-auto "$wrtbak_code" "$wrtbak_message" "$wrtbak_selected_path"
+		return 1
+	fi
+	wrtbak_firstboot_done_marker_json "$wrtbak_current_uid" >"$wrtbak_done_tmp"
+
+	printf '{\n'
+	printf '  "ok": true,\n'
+	printf '  "operation": "firstboot-auto",\n'
+	printf '  "auto_enabled": true,\n'
+	printf '  "target": '; wrtbak_json_string "$wrtbak_target"; printf ',\n'
+	printf '  "applied": true,\n'
+	printf '  "selected_remote_path": '; wrtbak_json_string "$wrtbak_selected_path"; printf ',\n'
+	printf '  "identity": '; cat "$wrtbak_identity_tmp"; printf ',\n'
+	printf '  "network": '; cat "$wrtbak_network_tmp"; printf ',\n'
+	printf '  "prepare": '; cat "$wrtbak_prepare_tmp"; printf ',\n'
+	printf '  "prebackup": '; cat "$wrtbak_prebackup_tmp"; printf ',\n'
+	printf '  "apply": '; cat "$wrtbak_apply_tmp"; printf ',\n'
+	printf '  "done_marker": '; cat "$wrtbak_done_tmp"; printf ',\n'
+	printf '  "reboot_recommended": true\n'
+	printf '}\n'
+
+	rm -f "$wrtbak_identity_tmp" "$wrtbak_done_tmp" "$wrtbak_network_tmp" "$wrtbak_candidates_tmp" "$wrtbak_prepare_tmp" "$wrtbak_prebackup_tmp" "$wrtbak_apply_tmp"
+}
+
 wrtbak_firstboot_write_json_atomic() {
 	wrtbak_path=$1
 	wrtbak_tmp="$wrtbak_path.tmp.$$"

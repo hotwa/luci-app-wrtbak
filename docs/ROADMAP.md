@@ -23,6 +23,11 @@
 
 - Rollback confirmation flow after restore.
 - Safer restore checkpoints and user-visible recovery guidance.
+- R2-backed firstboot recovery, including direct-R2 candidate lookup before
+  proxy services are restored and an opt-in auto-restore orchestrator for
+  owner-approved private firmware builds.
+- Cloud-published Nikki/DAE proxy artifact updates with checksum validation,
+  service health gates, and rollback.
 
 ## v0.4
 

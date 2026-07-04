@@ -56,6 +56,8 @@ config wrtbak 'main'
 	option default_target 's3'
 	option device_alias 'office-re-ss-01-test'
 	option proxy_url 'http://127.0.0.1:7890'
+	option firstboot_auto_enabled '1'
+	option firstboot_auto_target 's3'
 
 config remote 's3'
 	option enabled '1'
@@ -361,6 +363,52 @@ assert data["ok"] is True, data
 assert data["operation"] == "firstboot-complete", data
 assert data["done_marker"]["exists"] is True, data
 assert data["done_marker"]["status"] == "ok", data
+PY
+
+rm -rf "$fixture_root/root/wrtbak/firstboot" "$fixture_root/root/wrtbak/pre-restore" "$fixture_root/root/wrtbak/receipts"
+mkdir -p \
+	"$fixture_root/root/wrtbak/pre-restore" \
+	"$fixture_root/root/wrtbak/receipts" \
+	"$fixture_root/root/wrtbak/firstboot/receipts"
+cat >"$fixture_root/etc/config/wrtbak" <<'EOT'
+config wrtbak 'main'
+	option enabled '1'
+	option default_target 's3'
+	option device_alias 'office-re-ss-01-test'
+	option proxy_url 'http://127.0.0.1:7890'
+	option firstboot_auto_enabled '1'
+	option firstboot_auto_target 's3'
+
+config remote 's3'
+	option enabled '1'
+	option driver 'rclone'
+	option endpoint 'https://r2.example.invalid'
+	option region 'auto'
+	option bucket 'knowledge'
+	option access_key 'access-key-value'
+	option secret_key 'secret-key-value'
+	option path '/openwrt-config-backup/wrtbak/'
+	option force_path_style '1'
+EOT
+
+WRTBAK_FAKE_FAIL_ON_PROXY=1 run_cli firstboot-auto --target s3 --json >"$work_dir/auto.json"
+python3 - "$work_dir/auto.json" "$current_remote" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+remote_path = sys.argv[2]
+assert data["ok"] is True, data
+assert data["operation"] == "firstboot-auto", data
+assert data["auto_enabled"] is True, data
+assert data["applied"] is True, data
+assert data["selected_remote_path"] == remote_path, data
+assert data["prebackup"]["ok"] is True, data
+assert data["apply"]["ok"] is True, data
+assert data["done_marker"]["status"] == "ok", data
+assert data["done_marker"]["backup_remote_path"] == remote_path, data
+assert data["reboot_recommended"] is True, data
 PY
 
 echo "firstboot restore flow fixture passed"

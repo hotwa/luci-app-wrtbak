@@ -1,0 +1,74 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=01
+
+LOG_DIR=/root/wrtbak/firstboot
+LOG_FILE=$LOG_DIR/auto.log
+
+wrtbak_auto_uci_get() {
+	uci -q get "wrtbak.main.$1" 2>/dev/null || printf '%s\n' "$2"
+}
+
+wrtbak_auto_enabled() {
+	case "$(wrtbak_auto_uci_get firstboot_auto_enabled 0)" in
+		1|true|yes|on|enabled)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+wrtbak_auto_log() {
+	mkdir -p "$LOG_DIR" 2>/dev/null || true
+	printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)" "$*" >>"$LOG_FILE" 2>/dev/null || true
+}
+
+start() {
+	local attempts sleep_seconds target auto_reboot attempt output rc
+
+	wrtbak_auto_enabled || return 0
+	[ ! -f /root/wrtbak/firstboot/done.json ] || {
+		wrtbak_auto_log "skip already_done"
+		return 0
+	}
+
+	attempts=$(wrtbak_auto_uci_get firstboot_auto_attempts 18)
+	sleep_seconds=$(wrtbak_auto_uci_get firstboot_auto_sleep 10)
+	target=$(wrtbak_auto_uci_get firstboot_auto_target default)
+	auto_reboot=$(wrtbak_auto_uci_get firstboot_auto_reboot 1)
+
+	case "$attempts" in ''|*[!0-9]*) attempts=18 ;; esac
+	case "$sleep_seconds" in ''|*[!0-9]*) sleep_seconds=10 ;; esac
+	[ "$attempts" -gt 0 ] || attempts=1
+
+	attempt=1
+	while [ "$attempt" -le "$attempts" ]; do
+		output=$(wrtbak firstboot-auto --target "$target" --json 2>&1)
+		rc=$?
+		wrtbak_auto_log "attempt=$attempt rc=$rc"
+		printf '%s\n' "$output" >>"$LOG_FILE" 2>/dev/null || true
+
+		if [ "$rc" -eq 0 ] && printf '%s\n' "$output" | grep -F '"applied": true' >/dev/null 2>&1; then
+			wrtbak_auto_log "restore applied"
+			case "$auto_reboot" in
+				1|true|yes|on|enabled)
+					wrtbak_auto_log "reboot requested"
+					reboot
+					;;
+			esac
+			return 0
+		fi
+
+		if [ "$rc" -eq 0 ] && printf '%s\n' "$output" | grep -F '"reason": "already_done"' >/dev/null 2>&1; then
+			return 0
+		fi
+
+		attempt=$((attempt + 1))
+		[ "$attempt" -le "$attempts" ] || break
+		sleep "$sleep_seconds"
+	done
+
+	wrtbak_auto_log "exhausted attempts=$attempts"
+	return 0
+}

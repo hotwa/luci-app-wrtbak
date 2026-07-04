@@ -59,6 +59,7 @@ Usage:
   wrtbak firstboot-candidates --target default|webdav|s3 --json
   wrtbak firstboot-prepare --target default|webdav|s3 --path REMOTE_PATH --json
   wrtbak firstboot-apply --input LOCAL_ARCHIVE --prebackup LOCAL_ARCHIVE --confirm RESTORE --json
+  wrtbak firstboot-auto --target default|webdav|s3 --json
   wrtbak firstboot-complete --json
   wrtbak schedule-status --json
   wrtbak schedule-apply --json
@@ -869,6 +870,32 @@ wrtbak_parse_firstboot_apply() {
 	wrtbak_firstboot_apply_json "$wrtbak_input" "$wrtbak_prebackup" "$wrtbak_confirm"
 }
 
+wrtbak_parse_firstboot_auto() {
+	wrtbak_target=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown firstboot-auto argument: $1"
+				;;
+		esac
+	done
+
+	wrtbak_firstboot_auto_json "$wrtbak_target"
+}
+
 wrtbak_parse_export_sysupgrade() {
 	wrtbak_input=
 	wrtbak_output=
@@ -1069,6 +1096,9 @@ case "$wrtbak_command" in
 		;;
 	firstboot-apply)
 		wrtbak_parse_firstboot_apply "$@"
+		;;
+	firstboot-auto)
+		wrtbak_parse_firstboot_auto "$@"
 		;;
 	schedule-status|schedule-apply)
 		wrtbak_parse_schedule_json_only "$wrtbak_command" "$@"
