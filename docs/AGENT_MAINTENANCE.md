@@ -173,6 +173,13 @@ Maintenance agents should inspect this log and `wrtbak firstboot-complete
 --json` after a factory-reset validation before assuming the router recovered
 itself.
 
+The init service also writes an atomic mode-0600 coordination receipt at
+`/root/wrtbak/firstboot/gate.json`. Headscale enrollment and other consumers
+must wait while its state is `pending` or `reboot_pending`. States
+`already_done`, `restored`, `no_backup`, `failed_final`, and `disabled` are
+terminal decisions. The receipt contains status metadata only and never stores
+remote credentials or backup contents.
+
 ## Agent Rules
 
 - Run `doctor --json` before creating archives.
