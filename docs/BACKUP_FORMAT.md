@@ -14,6 +14,11 @@ Required top-level entries:
 
 Files below `rootfs/` map to absolute OpenWrt filesystem paths during restore. For example, `rootfs/etc/config/network` represents `/etc/config/network` on the target device.
 
+Default `items=all` backups include standard UCI firewall state through
+`/etc/config/firewall` and custom firewall extensions through
+`/etc/firewall.user`, `/etc/nftables.d`, and `/etc/hotplug.d/firewall` when
+those paths exist on the source router.
+
 ### Tar Entry Rules
 
 All `.wrtbak` tar member names MUST be relative, normalized POSIX paths.
@@ -56,6 +61,11 @@ Required `device` fields:
 
 | Field | Type | Description |
 | --- | --- | --- |
+| `uid` | string | Stable source device UID derived from board identity and a hashed primary MAC. |
+| `uid_algorithm` | string | UID derivation algorithm, such as `wrtbak-board-mac-sha256-10/v1`. |
+| `uid_input` | object | Non-secret UID derivation inputs. See required `uid_input` fields below. |
+| `alias` | string | User-friendly device alias from wrtbak configuration or hostname fallback. |
+| `model` | string | Source device model string when known. |
 | `label` | string | Human-readable device label. |
 | `hostname` | string | Source device hostname. |
 | `management_ip` | string | Example or source management IP address. Public examples should use documentation ranges, not private deployment details. |
@@ -64,6 +74,16 @@ Required `device` fields:
 | `board_name` | string | OpenWrt board name, such as `xiaomi,ax1800`. |
 | `target` | string | OpenWrt target/subtarget, such as `qualcommax/ipq60xx`. |
 | `arch` | string | OpenWrt package architecture, such as `aarch64_cortex-a53`. |
+
+Required `device.uid_input` fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `board_slug` | string | Slugified board identity used as the UID prefix. |
+| `mac_hash` | string | First 10 hex characters of the SHA-256 digest of the normalized primary MAC. |
+| `mac_source` | string | Source used for the primary MAC, such as `br-lan` or `network.lan.macaddr`. |
+
+Manifest producers MUST NOT serialize the raw primary MAC address in `device`.
 
 Required `firmware` fields:
 
@@ -130,3 +150,11 @@ For example, a sysupgrade archive may contain:
 The optional `etc/backup/wrtbak-manifest.json` file can preserve wrtbak metadata for humans or wrtbak-aware tools after export.
 
 Native `sysupgrade -r` restores files from a sysupgrade archive, but it does not validate wrtbak metadata. Any device, firmware, profile, or schema checks must be performed by wrtbak-aware tooling before invoking native restore commands.
+
+## Restore Enforcement
+
+`wrtbak restore-apply` treats the top-level `manifest.files[]` array as the restore allowlist. Files not listed there are rejected before any live write, even if they are present in the tar archive. Regular file entries must match the manifest size and SHA-256 digest.
+
+Restore commands require a fresh local pre-restore `.wrtbak` backup receipt before writing. The receipt binds the prebackup archive path, size, SHA-256 digest, host device ID, creation time, and format. Receipts older than 24 hours or created on another device are rejected.
+
+Confirmed `.wrtbak` restores require the exact confirmation token `RESTORE`. Native `.sysupgrade.tar.gz` restores use `sysupgrade -r` and can interrupt LuCI, SSH, Tailscale, WireGuard, DNS, or routing access. Operators should expect to reconnect and verify the router after sysupgrade or after restoring network-facing configuration.

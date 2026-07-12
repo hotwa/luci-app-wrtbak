@@ -14,7 +14,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-mkdir -p "$bin_dir" "$fixture_root/etc/config" "$output_dir"
+mkdir -p "$bin_dir" "$fixture_root/etc/config" "$fixture_root/tmp/sysinfo" "$fixture_root/sys/class/net/br-lan" "$output_dir"
 
 cat >"$bin_dir/apk" <<'EOT'
 #!/bin/sh
@@ -47,6 +47,9 @@ config interface 'lan'
 	option ipaddr '192.0.2.234'
 EOT
 
+printf 'Agent Board\n' >"$fixture_root/tmp/sysinfo/board_name"
+printf '02:11:22:33:44:55\n' >"$fixture_root/sys/class/net/br-lan/address"
+
 cat >"$fixture_root/etc/openwrt_release" <<'EOT'
 DISTRIB_ID='ImmortalWrt'
 DISTRIB_RELEASE='SNAPSHOT'
@@ -65,6 +68,7 @@ WRTBAK_LIBDIR="$libdir" \
 	"$cli" status --json >"$work_dir/status.json"
 
 python3 - "$work_dir/status.json" "$fixture_root" "$libdir" "$output_dir" <<'PY'
+import hashlib
 import json
 import sys
 
@@ -72,7 +76,7 @@ status_path, fixture_root, libdir, output_dir = sys.argv[1:]
 with open(status_path, encoding="utf-8") as handle:
     data = json.load(handle)
 
-assert data["tool_version"] == "0.1.0"
+assert data["tool_version"] == "0.3.8"
 assert data["root"] == fixture_root
 assert data["libdir"] == libdir
 assert data["package_manager"] == "apk"
@@ -80,6 +84,13 @@ assert data["paths_file"].endswith("/paths.default")
 assert data["output_dir"] == output_dir
 assert data["device"]["hostname"] == "agent-router"
 assert data["device"]["management_ip"] == "192.0.2.234"
+expected_hash = hashlib.sha256(b"021122334455").hexdigest()[:10]
+assert data["device"]["uid"] == f"agent-board-{expected_hash}"
+assert data["device"]["alias"] == "agent-router"
+assert data["device"]["uid_status"] == "ok"
+assert data["device"]["uid_algorithm"] == "wrtbak-board-mac-sha256-10/v1"
+assert data["device"]["board_slug"] == "agent-board"
+assert data["device"]["mac_source"] == "br-lan"
 assert data["firmware"]["distribution"] == "ImmortalWrt"
 assert data["firmware"]["target"] == "qualcommax/ipq60xx"
 assert data["counts"]["detected_items"] >= 3

@@ -11,18 +11,23 @@
 - WebDAV and S3-compatible remote backup targets with LuCI configuration.
 - CLI and LuCI operations for remote test, upload, list, delete, and retention pruning.
 - Cron-backed automatic backup scheduling.
+- Confirmed remote restore flow for WebDAV/S3 backups with restore review, mandatory pre-restore backup, explicit `RESTORE` confirmation, `.wrtbak` apply, and native sysupgrade handoff.
 
 ## v0.2
 
-- Remote restore/import flow from WebDAV and S3 backups.
-- Restore review page for uploaded `.wrtbak` archives.
-- Selective restore UI with manifest and device compatibility checks.
-- rpcd/ubus integration for privileged restore operations.
+- Richer restore item selection in LuCI beyond the initial core-system/all buttons.
+- Restore evidence export for operator review.
+- Cross-device restore profiles with clearer compatibility policies.
 
 ## v0.3
 
 - Rollback confirmation flow after restore.
 - Safer restore checkpoints and user-visible recovery guidance.
+- R2-backed firstboot recovery, including direct-R2 candidate lookup before
+  proxy services are restored and an opt-in auto-restore orchestrator for
+  owner-approved private firmware builds.
+- Cloud-published Nikki/DAE proxy artifact updates with checksum validation,
+  service health gates, and rollback.
 
 ## v0.4
 

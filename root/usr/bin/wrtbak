@@ -24,15 +24,20 @@ fi
 . "$WRTBAK_LIBDIR/web.sh"
 . "$WRTBAK_LIBDIR/agent.sh"
 . "$WRTBAK_LIBDIR/config.sh"
+. "$WRTBAK_LIBDIR/identity.sh"
 . "$WRTBAK_LIBDIR/remote.sh"
 . "$WRTBAK_LIBDIR/remote_webdav.sh"
 . "$WRTBAK_LIBDIR/remote_s3.sh"
+. "$WRTBAK_LIBDIR/proxy.sh"
+. "$WRTBAK_LIBDIR/restore.sh"
+. "$WRTBAK_LIBDIR/firstboot.sh"
 . "$WRTBAK_LIBDIR/schedule.sh"
 
 wrtbak_usage() {
 	cat <<'EOF'
 Usage:
   wrtbak info
+  wrtbak identity --json
   wrtbak status --json
   wrtbak doctor --json
   wrtbak remote-status --json
@@ -41,6 +46,21 @@ Usage:
   wrtbak remote-upload --target default|webdav|s3 --profile NAME --items IDS|all --format wrtbak|sysupgrade [--prune-max N] --json
   wrtbak remote-delete --target default|webdav|s3 --path REMOTE_PATH --json
   wrtbak remote-prune --target default|webdav|s3 --max N --json
+  wrtbak remote-download --target default|webdav|s3 --path REMOTE_PATH [--legacy-inspect 1] --json
+  wrtbak proxy-status --json
+  wrtbak proxy-candidates --target default|webdav|s3 --proxy nikki|dae --json
+  wrtbak proxy-prepare --target default|webdav|s3 --proxy nikki|dae --path REMOTE_PATH --json
+  wrtbak proxy-apply --proxy nikki|dae --input LOCAL_FILE --manifest LOCAL_JSON --confirm APPLY --json
+  wrtbak restore-prepare --input LOCAL_ARCHIVE --json
+  wrtbak restore-prebackup --profile pre-restore --items all --format wrtbak [--require-remote 0|1] [--target default|webdav|s3] [--source-backup-key KEY] --json
+  wrtbak restore-apply --input LOCAL_ARCHIVE --mode all|selected --items IDS|all --prebackup LOCAL_ARCHIVE --confirm RESTORE [--restart-services 0|1] --json
+  wrtbak restore-sysupgrade --input LOCAL_ARCHIVE --prebackup LOCAL_ARCHIVE --confirm RESTORE [--execute 0|1] --json
+  wrtbak firstboot-status --json
+  wrtbak firstboot-candidates --target default|webdav|s3 --json
+  wrtbak firstboot-prepare --target default|webdav|s3 --path REMOTE_PATH --json
+  wrtbak firstboot-apply --input LOCAL_ARCHIVE --prebackup LOCAL_ARCHIVE --confirm RESTORE --json
+  wrtbak firstboot-auto --target default|webdav|s3 --json
+  wrtbak firstboot-complete --json
   wrtbak schedule-status --json
   wrtbak schedule-apply --json
   wrtbak detect [--json]
@@ -321,6 +341,377 @@ wrtbak_parse_remote_prune() {
 	wrtbak_remote_prune "$wrtbak_target" "$wrtbak_max"
 }
 
+wrtbak_parse_remote_download() {
+	wrtbak_target=
+	wrtbak_path=
+	wrtbak_legacy_inspect=0
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--path)
+				[ "$#" -ge 2 ] || wrtbak_die "--path requires a value"
+				wrtbak_path=$2
+				shift 2
+				;;
+			--legacy-inspect)
+				[ "$#" -ge 2 ] || wrtbak_die "--legacy-inspect requires a value"
+				wrtbak_legacy_inspect=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown remote-download argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_target" ] || wrtbak_die "--target is required"
+	[ -n "$wrtbak_path" ] || wrtbak_die "--path is required"
+	wrtbak_remote_download "$wrtbak_target" "$wrtbak_path" "$wrtbak_legacy_inspect"
+}
+
+wrtbak_parse_proxy_status() {
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown proxy-status argument: $1"
+				;;
+		esac
+	done
+
+	wrtbak_proxy_status_json
+}
+
+wrtbak_parse_proxy_candidates() {
+	wrtbak_target=default
+	wrtbak_proxy=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--proxy)
+				[ "$#" -ge 2 ] || wrtbak_die "--proxy requires a value"
+				wrtbak_proxy=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown proxy-candidates argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_proxy" ] || wrtbak_die "--proxy is required"
+	wrtbak_proxy_candidates_json "$wrtbak_target" "$wrtbak_proxy"
+}
+
+wrtbak_parse_proxy_prepare() {
+	wrtbak_target=default
+	wrtbak_proxy=
+	wrtbak_path=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--proxy)
+				[ "$#" -ge 2 ] || wrtbak_die "--proxy requires a value"
+				wrtbak_proxy=$2
+				shift 2
+				;;
+			--path)
+				[ "$#" -ge 2 ] || wrtbak_die "--path requires a value"
+				wrtbak_path=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown proxy-prepare argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_proxy" ] || wrtbak_die "--proxy is required"
+	[ -n "$wrtbak_path" ] || wrtbak_die "--path is required"
+	wrtbak_proxy_prepare_json "$wrtbak_target" "$wrtbak_proxy" "$wrtbak_path"
+}
+
+wrtbak_parse_proxy_apply() {
+	wrtbak_proxy=
+	wrtbak_input=
+	wrtbak_manifest=
+	wrtbak_confirm=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--proxy)
+				[ "$#" -ge 2 ] || wrtbak_die "--proxy requires a value"
+				wrtbak_proxy=$2
+				shift 2
+				;;
+			--input)
+				[ "$#" -ge 2 ] || wrtbak_die "--input requires a value"
+				wrtbak_input=$2
+				shift 2
+				;;
+			--manifest)
+				[ "$#" -ge 2 ] || wrtbak_die "--manifest requires a value"
+				wrtbak_manifest=$2
+				shift 2
+				;;
+			--confirm)
+				[ "$#" -ge 2 ] || wrtbak_die "--confirm requires a value"
+				wrtbak_confirm=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown proxy-apply argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_proxy" ] || wrtbak_die "--proxy is required"
+	[ -n "$wrtbak_input" ] || wrtbak_die "--input is required"
+	[ -n "$wrtbak_manifest" ] || wrtbak_die "--manifest is required"
+	[ -n "$wrtbak_confirm" ] || wrtbak_die "--confirm is required"
+	wrtbak_proxy_apply_json "$wrtbak_proxy" "$wrtbak_input" "$wrtbak_manifest" "$wrtbak_confirm"
+}
+
+wrtbak_parse_restore_prepare() {
+	wrtbak_input=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--input)
+				[ "$#" -ge 2 ] || wrtbak_die "--input requires a value"
+				wrtbak_input=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown restore-prepare argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_input" ] || wrtbak_die "--input is required"
+	wrtbak_restore_prepare "$wrtbak_input"
+}
+
+wrtbak_parse_restore_prebackup() {
+	wrtbak_profile=
+	wrtbak_items=
+	wrtbak_format=wrtbak
+	wrtbak_require_remote=${WRTBAK_RESTORE_PREBACKUP_REQUIRE_REMOTE:-0}
+	wrtbak_target=${WRTBAK_RESTORE_PREBACKUP_TARGET:-default}
+	wrtbak_source_backup_key=${WRTBAK_RESTORE_SOURCE_BACKUP_KEY:-}
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--profile)
+				[ "$#" -ge 2 ] || wrtbak_die "--profile requires a value"
+				wrtbak_profile=$2
+				shift 2
+				;;
+			--items)
+				[ "$#" -ge 2 ] || wrtbak_die "--items requires a value"
+				wrtbak_items=$2
+				shift 2
+				;;
+			--format)
+				[ "$#" -ge 2 ] || wrtbak_die "--format requires a value"
+				wrtbak_format=$2
+				shift 2
+				;;
+			--require-remote)
+				[ "$#" -ge 2 ] || wrtbak_die "--require-remote requires a value"
+				wrtbak_require_remote=$2
+				shift 2
+				;;
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--source-backup-key)
+				[ "$#" -ge 2 ] || wrtbak_die "--source-backup-key requires a value"
+				wrtbak_source_backup_key=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown restore-prebackup argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_profile" ] || wrtbak_die "--profile is required"
+	[ -n "$wrtbak_items" ] || wrtbak_die "--items is required"
+	wrtbak_restore_prebackup "$wrtbak_profile" "$wrtbak_items" "$wrtbak_format" "$wrtbak_require_remote" "$wrtbak_target" "$wrtbak_source_backup_key"
+}
+
+wrtbak_parse_restore_apply() {
+	wrtbak_input=
+	wrtbak_mode=selected
+	wrtbak_items=all
+	wrtbak_prebackup=
+	wrtbak_confirm=
+	wrtbak_restart_services=0
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--input)
+				[ "$#" -ge 2 ] || wrtbak_die "--input requires a value"
+				wrtbak_input=$2
+				shift 2
+				;;
+			--mode)
+				[ "$#" -ge 2 ] || wrtbak_die "--mode requires a value"
+				wrtbak_mode=$2
+				shift 2
+				;;
+			--items)
+				[ "$#" -ge 2 ] || wrtbak_die "--items requires a value"
+				wrtbak_items=$2
+				shift 2
+				;;
+			--prebackup)
+				[ "$#" -ge 2 ] || wrtbak_die "--prebackup requires a value"
+				wrtbak_prebackup=$2
+				shift 2
+				;;
+			--confirm)
+				[ "$#" -ge 2 ] || wrtbak_die "--confirm requires a value"
+				wrtbak_confirm=$2
+				shift 2
+				;;
+			--restart-services)
+				[ "$#" -ge 2 ] || wrtbak_die "--restart-services requires a value"
+				wrtbak_restart_services=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown restore-apply argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_input" ] || wrtbak_die "--input is required"
+	[ -n "$wrtbak_prebackup" ] || wrtbak_die "--prebackup is required"
+	[ -n "$wrtbak_confirm" ] || wrtbak_die "--confirm is required"
+	wrtbak_restore_apply "$wrtbak_input" "$wrtbak_mode" "$wrtbak_items" "$wrtbak_prebackup" "$wrtbak_confirm" "$wrtbak_restart_services"
+}
+
+wrtbak_parse_restore_sysupgrade() {
+	wrtbak_input=
+	wrtbak_prebackup=
+	wrtbak_confirm=
+	wrtbak_execute=0
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--input)
+				[ "$#" -ge 2 ] || wrtbak_die "--input requires a value"
+				wrtbak_input=$2
+				shift 2
+				;;
+			--prebackup)
+				[ "$#" -ge 2 ] || wrtbak_die "--prebackup requires a value"
+				wrtbak_prebackup=$2
+				shift 2
+				;;
+			--confirm)
+				[ "$#" -ge 2 ] || wrtbak_die "--confirm requires a value"
+				wrtbak_confirm=$2
+				shift 2
+				;;
+			--execute)
+				[ "$#" -ge 2 ] || wrtbak_die "--execute requires a value"
+				wrtbak_execute=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown restore-sysupgrade argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_input" ] || wrtbak_die "--input is required"
+	[ -n "$wrtbak_prebackup" ] || wrtbak_die "--prebackup is required"
+	[ -n "$wrtbak_confirm" ] || wrtbak_die "--confirm is required"
+	wrtbak_restore_sysupgrade "$wrtbak_input" "$wrtbak_prebackup" "$wrtbak_confirm" "$wrtbak_execute"
+}
+
 wrtbak_parse_schedule_json_only() {
 	wrtbak_schedule_command=$1
 	shift
@@ -346,6 +737,163 @@ wrtbak_parse_schedule_json_only() {
 			wrtbak_schedule_apply
 			;;
 	esac
+}
+
+wrtbak_parse_firstboot_json_only() {
+	wrtbak_firstboot_command=$1
+	shift
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown $wrtbak_firstboot_command argument: $1"
+				;;
+		esac
+	done
+
+	case "$wrtbak_firstboot_command" in
+		firstboot-status)
+			wrtbak_firstboot_status_json
+			;;
+		firstboot-complete)
+			wrtbak_firstboot_complete_json
+			;;
+	esac
+}
+
+wrtbak_parse_firstboot_candidates() {
+	wrtbak_target=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown firstboot-candidates argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_target" ] || wrtbak_target=default
+	wrtbak_firstboot_candidates_json "$wrtbak_target"
+}
+
+wrtbak_parse_firstboot_prepare() {
+	wrtbak_target=
+	wrtbak_path=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--path)
+				[ "$#" -ge 2 ] || wrtbak_die "--path requires a value"
+				wrtbak_path=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown firstboot-prepare argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_target" ] || wrtbak_target=default
+	[ -n "$wrtbak_path" ] || wrtbak_die "--path is required"
+	wrtbak_firstboot_prepare_json "$wrtbak_target" "$wrtbak_path"
+}
+
+wrtbak_parse_firstboot_apply() {
+	wrtbak_input=
+	wrtbak_prebackup=
+	wrtbak_confirm=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--input)
+				[ "$#" -ge 2 ] || wrtbak_die "--input requires a value"
+				wrtbak_input=$2
+				shift 2
+				;;
+			--prebackup)
+				[ "$#" -ge 2 ] || wrtbak_die "--prebackup requires a value"
+				wrtbak_prebackup=$2
+				shift 2
+				;;
+			--confirm)
+				[ "$#" -ge 2 ] || wrtbak_die "--confirm requires a value"
+				wrtbak_confirm=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown firstboot-apply argument: $1"
+				;;
+		esac
+	done
+
+	[ -n "$wrtbak_input" ] || wrtbak_die "--input is required"
+	[ -n "$wrtbak_prebackup" ] || wrtbak_die "--prebackup is required"
+	[ -n "$wrtbak_confirm" ] || wrtbak_die "--confirm is required"
+	wrtbak_firstboot_apply_json "$wrtbak_input" "$wrtbak_prebackup" "$wrtbak_confirm"
+}
+
+wrtbak_parse_firstboot_auto() {
+	wrtbak_target=
+
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--target)
+				[ "$#" -ge 2 ] || wrtbak_die "--target requires a value"
+				wrtbak_target=$2
+				shift 2
+				;;
+			--json)
+				shift
+				;;
+			-h|--help)
+				wrtbak_usage
+				exit 0
+				;;
+			*)
+				wrtbak_die "unknown firstboot-auto argument: $1"
+				;;
+		esac
+	done
+
+	wrtbak_firstboot_auto_json "$wrtbak_target"
 }
 
 wrtbak_parse_export_sysupgrade() {
@@ -489,6 +1037,9 @@ case "$wrtbak_command" in
 		[ "$#" -eq 0 ] || wrtbak_die "info does not accept arguments"
 		wrtbak_info
 		;;
+	identity)
+		wrtbak_parse_identity "$@"
+		;;
 	status|doctor)
 		wrtbak_parse_agent_json_only "$wrtbak_command" "$@"
 		;;
@@ -506,6 +1057,48 @@ case "$wrtbak_command" in
 		;;
 	remote-prune)
 		wrtbak_parse_remote_prune "$@"
+		;;
+	remote-download)
+		wrtbak_parse_remote_download "$@"
+		;;
+	proxy-status)
+		wrtbak_parse_proxy_status "$@"
+		;;
+	proxy-candidates)
+		wrtbak_parse_proxy_candidates "$@"
+		;;
+	proxy-prepare)
+		wrtbak_parse_proxy_prepare "$@"
+		;;
+	proxy-apply)
+		wrtbak_parse_proxy_apply "$@"
+		;;
+	restore-prepare)
+		wrtbak_parse_restore_prepare "$@"
+		;;
+	restore-prebackup)
+		wrtbak_parse_restore_prebackup "$@"
+		;;
+	restore-apply)
+		wrtbak_parse_restore_apply "$@"
+		;;
+	restore-sysupgrade)
+		wrtbak_parse_restore_sysupgrade "$@"
+		;;
+	firstboot-status|firstboot-complete)
+		wrtbak_parse_firstboot_json_only "$wrtbak_command" "$@"
+		;;
+	firstboot-candidates)
+		wrtbak_parse_firstboot_candidates "$@"
+		;;
+	firstboot-prepare)
+		wrtbak_parse_firstboot_prepare "$@"
+		;;
+	firstboot-apply)
+		wrtbak_parse_firstboot_apply "$@"
+		;;
+	firstboot-auto)
+		wrtbak_parse_firstboot_auto "$@"
 		;;
 	schedule-status|schedule-apply)
 		wrtbak_parse_schedule_json_only "$wrtbak_command" "$@"

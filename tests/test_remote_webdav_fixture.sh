@@ -10,6 +10,8 @@ cli="$repo_dir/root/usr/bin/wrtbak"
 curl_log="$work_dir/curl.log"
 netrc_log="$work_dir/netrc-paths.log"
 xml_file="$work_dir/webdav.xml"
+root_xml_file="$work_dir/webdav-root.xml"
+legacy_only_xml_file="$work_dir/webdav-legacy-only.xml"
 
 cleanup() {
 	rm -rf "$work_dir"
@@ -18,17 +20,17 @@ trap cleanup EXIT HUP INT TERM
 
 mkdir -p "$bin_dir" "$fixture_root/etc/config" "$fixture_root/etc"
 
-hash8=$(python3 - <<'PY'
-import hashlib
-print(hashlib.sha256(b"fixture-machine-id").hexdigest()[:8])
-PY
-)
-device_id="fixture-router-test-board-model-$hash8"
+device_uid="fixture-device-uid-0001"
+device_alias="fixture-router"
+legacy_device_id="old-device-id-0001"
+remote_prefix="R2"
 
 cat >"$fixture_root/etc/config/wrtbak" <<'EOT'
 config wrtbak 'main'
 	option enabled '1'
 	option default_target 'webdav'
+	option device_id 'old-device-id-0001'
+	option device_alias 'fixture-router'
 	option history_file '/overlay/wrtbak/remote-history.jsonl'
 	option history_max_entries '20'
 
@@ -61,16 +63,56 @@ cat >"$xml_file" <<EOT
 <?xml version="1.0" encoding="utf-8"?>
 <D:multistatus xmlns:D="DAV:">
   <D:response>
-    <D:href>/dav/R2/wrtbak/$device_id/</D:href>
+    <D:href>/dav/R2/devices/$device_uid/</D:href>
     <D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop></D:propstat>
   </D:response>
   <D:response>
-    <D:href>/dav/R2/wrtbak/$device_id/wrtbak/2026/auto-20260625T020000Z.wrtbak</D:href>
+    <D:href>/dav/R2/devices/$device_uid/wrtbak/2026/auto-20260625T020000Z.wrtbak</D:href>
     <D:propstat><D:prop><D:getcontentlength>5</D:getcontentlength><D:getlastmodified>Thu, 25 Jun 2026 02:00:00 GMT</D:getlastmodified><D:resourcetype/></D:prop></D:propstat>
   </D:response>
   <D:response>
-    <D:href>/dav/R2/wrtbak/$device_id/sysupgrade/2026/auto-20260625T020000Z.sysupgrade.tar.gz</D:href>
+    <D:href>/dav/R2/devices/$device_uid/sysupgrade/2026/auto-20260625T020000Z.sysupgrade.tar.gz</D:href>
     <D:propstat><D:prop><D:getcontentlength>7</D:getcontentlength><D:getlastmodified>Thu, 25 Jun 2026 03:00:00 GMT</D:getlastmodified><D:resourcetype/></D:prop></D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/dav/R2/devices/$device_uid/pre-restore/2026/safety-20260624T010000Z.wrtbak</D:href>
+    <D:propstat><D:prop><D:getcontentlength>23</D:getcontentlength><D:getlastmodified>Wed, 24 Jun 2026 01:00:00 GMT</D:getlastmodified><D:resourcetype/></D:prop></D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/dav/R2/wrtbak/$device_alias/wrtbak/2026/legacy.wrtbak</D:href>
+    <D:propstat><D:prop><D:getcontentlength>3</D:getcontentlength><D:getlastmodified>Wed, 24 Jun 2026 02:00:00 GMT</D:getlastmodified><D:resourcetype/></D:prop></D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/dav/R2/wrtbak/$legacy_device_id/wrtbak/2026/legacy-device-id.wrtbak</D:href>
+    <D:propstat><D:prop><D:getcontentlength>17</D:getcontentlength><D:getlastmodified>Wed, 24 Jun 2026 04:00:00 GMT</D:getlastmodified><D:resourcetype/></D:prop></D:propstat>
+  </D:response>
+</D:multistatus>
+EOT
+
+cat >"$root_xml_file" <<EOT
+<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response>
+    <D:href>/dav/devices/$device_uid/wrtbak/2026/root-auto-20260625T020000Z.wrtbak</D:href>
+    <D:propstat><D:prop><D:getcontentlength>29</D:getcontentlength><D:getlastmodified>Thu, 25 Jun 2026 02:00:00 GMT</D:getlastmodified><D:resourcetype/></D:prop></D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/dav/devices/$device_uid/sysupgrade/2026/root-auto-20260625T020000Z.sysupgrade.tar.gz</D:href>
+    <D:propstat><D:prop><D:getcontentlength>31</D:getcontentlength><D:getlastmodified>Thu, 25 Jun 2026 03:00:00 GMT</D:getlastmodified><D:resourcetype/></D:prop></D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/dav/devices/$device_uid/pre-restore/2026/root-safety-20260624T010000Z.wrtbak</D:href>
+    <D:propstat><D:prop><D:getcontentlength>37</D:getcontentlength><D:getlastmodified>Wed, 24 Jun 2026 01:00:00 GMT</D:getlastmodified><D:resourcetype/></D:prop></D:propstat>
+  </D:response>
+</D:multistatus>
+EOT
+
+cat >"$legacy_only_xml_file" <<EOT
+<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response>
+    <D:href>/dav/R2/wrtbak/$legacy_device_id/wrtbak/2026/legacy-device-id-only.wrtbak</D:href>
+    <D:propstat><D:prop><D:getcontentlength>19</D:getcontentlength><D:getlastmodified>Wed, 24 Jun 2026 05:00:00 GMT</D:getlastmodified><D:resourcetype/></D:prop></D:propstat>
   </D:response>
 </D:multistatus>
 EOT
@@ -80,6 +122,7 @@ cat >"$bin_dir/curl" <<'EOT'
 printf '%s\n' "$*" >>"$WRTBAK_FAKE_CURL_LOG"
 
 previous=
+url=
 for arg in "$@"; do
 	if [ "$previous" = "--netrc-file" ]; then
 		printf '%s\n' "$arg" >>"$WRTBAK_FAKE_NETRC_LOG"
@@ -89,6 +132,11 @@ for arg in "$@"; do
 			exit 44
 		fi
 	fi
+	case "$arg" in
+		http://*|https://*)
+			url=$arg
+			;;
+	esac
 	previous=$arg
 done
 
@@ -97,6 +145,15 @@ case " $* " in
 		if [ "${WRTBAK_FAKE_PROPFIND_FAIL:-0}" = "1" ]; then
 			printf 'HTTP 405 PROPFIND unsupported\n' >&2
 			exit 22
+		fi
+		current_uid=${WRTBAK_FAKE_DEVICE_UID:-}
+		if [ -n "$current_uid" ] && [ "${WRTBAK_FAKE_CURRENT_PROPFIND_FAIL:-0}" = "1" ]; then
+			case "$url" in
+				*/devices/"$current_uid"|*/devices/"$current_uid"/)
+					printf 'HTTP 404 current collection missing\n' >&2
+					exit 22
+					;;
+			esac
 		fi
 		cat "$WRTBAK_FAKE_WEBDAV_XML"
 		exit 0
@@ -126,20 +183,24 @@ WRTBAK_LIBDIR="$libdir" \
 WRTBAK_FAKE_CURL_LOG="$curl_log" \
 WRTBAK_FAKE_NETRC_LOG="$netrc_log" \
 WRTBAK_FAKE_WEBDAV_XML="$xml_file" \
+WRTBAK_ALLOW_TEST_HOOKS=1 \
+WRTBAK_FAKE_DEVICE_UID="$device_uid" \
 	"$cli" remote-test --target webdav --json >"$work_dir/test.json"
 
-python3 - "$work_dir/test.json" <<'PY'
+python3 - "$work_dir/test.json" "$remote_prefix" "$device_uid" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     data = json.load(handle)
+remote_prefix = sys.argv[2]
+device_uid = sys.argv[3]
 
 assert data["ok"] is True
 assert data["operation"] == "remote-test"
 assert data["target"] == "webdav"
 assert data["driver"] == "curl"
-assert data["remote_path"].endswith(".probe")
+assert data["remote_path"] == f"{remote_prefix}/devices/{device_uid}/.probe"
 PY
 
 if grep -q 'webdav-pass-value' "$curl_log"; then
@@ -160,26 +221,141 @@ WRTBAK_LIBDIR="$libdir" \
 WRTBAK_FAKE_CURL_LOG="$curl_log" \
 WRTBAK_FAKE_NETRC_LOG="$netrc_log" \
 WRTBAK_FAKE_WEBDAV_XML="$xml_file" \
+WRTBAK_ALLOW_TEST_HOOKS=1 \
+WRTBAK_FAKE_DEVICE_UID="$device_uid" \
 	"$cli" remote-list --target webdav --json >"$work_dir/list.json"
 
-python3 - "$work_dir/list.json" "$device_id" <<'PY'
+python3 - "$work_dir/list.json" "$remote_prefix" "$device_uid" "$device_alias" "$legacy_device_id" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     data = json.load(handle)
-device_id = sys.argv[2]
+remote_prefix = sys.argv[2]
+device_uid = sys.argv[3]
+device_alias = sys.argv[4]
+legacy_device_id = sys.argv[5]
 
 assert data["ok"] is True
 assert data["operation"] == "remote-list"
 assert data["target"] == "webdav"
 assert data["driver"] == "curl"
 paths = [item["path"] for item in data["backups"]]
-assert f"R2/wrtbak/{device_id}/wrtbak/2026/auto-20260625T020000Z.wrtbak" in paths
-assert f"R2/wrtbak/{device_id}/sysupgrade/2026/auto-20260625T020000Z.sysupgrade.tar.gz" in paths
-assert all(item["filename"].startswith("auto-") for item in data["backups"])
+current_wrtbak = f"{remote_prefix}/devices/{device_uid}/wrtbak/2026/auto-20260625T020000Z.wrtbak"
+current_sysupgrade = f"{remote_prefix}/devices/{device_uid}/sysupgrade/2026/auto-20260625T020000Z.sysupgrade.tar.gz"
+pre_restore = f"{remote_prefix}/devices/{device_uid}/pre-restore/2026/safety-20260624T010000Z.wrtbak"
+legacy = f"{remote_prefix}/wrtbak/{device_alias}/wrtbak/2026/legacy.wrtbak"
+legacy_device = f"{remote_prefix}/wrtbak/{legacy_device_id}/wrtbak/2026/legacy-device-id.wrtbak"
+assert current_wrtbak in paths
+assert current_sysupgrade in paths
+assert pre_restore not in paths
+assert all("/pre-restore/" not in path for path in paths)
+assert legacy in paths
+assert legacy_device in paths
+assert len(paths) == len(set(paths))
+by_path = {item["path"]: item for item in data["backups"]}
+assert by_path[current_wrtbak].get("legacy") in (None, False)
+assert by_path[current_sysupgrade].get("legacy") in (None, False)
+assert by_path[legacy]["legacy"] is True
+assert by_path[legacy_device]["legacy"] is True
+assert by_path[current_wrtbak]["filename"].startswith("auto-")
+assert by_path[current_sysupgrade]["filename"].startswith("auto-")
+assert by_path[legacy]["filename"] == "legacy.wrtbak"
+assert by_path[legacy_device]["filename"] == "legacy-device-id.wrtbak"
 assert {item["format"] for item in data["backups"]} == {"wrtbak", "sysupgrade"}
-assert {item["size"] for item in data["backups"]} == {5, 7}
+assert {item["size"] for item in data["backups"]} == {3, 5, 7, 17}
+PY
+
+cp "$fixture_root/etc/config/wrtbak" "$work_dir/wrtbak-prefixed.conf"
+sed "s#option path '/R2/'#option path '/'#" "$work_dir/wrtbak-prefixed.conf" >"$work_dir/wrtbak-root-prefix.conf"
+mv "$work_dir/wrtbak-root-prefix.conf" "$fixture_root/etc/config/wrtbak"
+
+PATH="$bin_dir:$PATH" \
+WRTBAK_ROOT="$fixture_root" \
+WRTBAK_LIBDIR="$libdir" \
+WRTBAK_FAKE_CURL_LOG="$curl_log" \
+WRTBAK_FAKE_NETRC_LOG="$netrc_log" \
+WRTBAK_FAKE_WEBDAV_XML="$root_xml_file" \
+WRTBAK_ALLOW_TEST_HOOKS=1 \
+WRTBAK_FAKE_DEVICE_UID="$device_uid" \
+	"$cli" remote-list --target webdav --json >"$work_dir/list-root-prefix.json"
+
+python3 - "$work_dir/list-root-prefix.json" "$device_uid" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+device_uid = sys.argv[2]
+paths = [item["path"] for item in data["backups"]]
+assert f"devices/{device_uid}/wrtbak/2026/root-auto-20260625T020000Z.wrtbak" in paths
+assert f"devices/{device_uid}/sysupgrade/2026/root-auto-20260625T020000Z.sysupgrade.tar.gz" in paths
+assert f"devices/{device_uid}/pre-restore/2026/root-safety-20260624T010000Z.wrtbak" not in paths
+assert all("/pre-restore/" not in path for path in paths)
+PY
+
+pre_restore_root_path="devices/$device_uid/pre-restore/2026/root-safety-20260624T010000Z.wrtbak"
+if PATH="$bin_dir:$PATH" \
+	WRTBAK_ROOT="$fixture_root" \
+	WRTBAK_LIBDIR="$libdir" \
+	WRTBAK_FAKE_CURL_LOG="$curl_log" \
+	WRTBAK_FAKE_NETRC_LOG="$netrc_log" \
+	WRTBAK_FAKE_WEBDAV_XML="$root_xml_file" \
+	WRTBAK_ALLOW_TEST_HOOKS=1 \
+	WRTBAK_FAKE_DEVICE_UID="$device_uid" \
+	"$cli" remote-download --target webdav --path "$pre_restore_root_path" --json >"$work_dir/download-pre-restore-root.json"; then
+	echo "remote-download should reject root-prefix pre-restore paths" >&2
+	exit 1
+fi
+
+if PATH="$bin_dir:$PATH" \
+	WRTBAK_ROOT="$fixture_root" \
+	WRTBAK_LIBDIR="$libdir" \
+	WRTBAK_FAKE_CURL_LOG="$curl_log" \
+	WRTBAK_FAKE_NETRC_LOG="$netrc_log" \
+	WRTBAK_FAKE_WEBDAV_XML="$root_xml_file" \
+	WRTBAK_ALLOW_TEST_HOOKS=1 \
+	WRTBAK_FAKE_DEVICE_UID="$device_uid" \
+	"$cli" remote-delete --target webdav --path "$pre_restore_root_path" --json >"$work_dir/delete-pre-restore-root.json"; then
+	echo "remote-delete should reject root-prefix pre-restore paths" >&2
+	exit 1
+fi
+
+mv "$work_dir/wrtbak-prefixed.conf" "$fixture_root/etc/config/wrtbak"
+
+PATH="$bin_dir:$PATH" \
+WRTBAK_ROOT="$fixture_root" \
+WRTBAK_LIBDIR="$libdir" \
+WRTBAK_FAKE_CURL_LOG="$curl_log" \
+WRTBAK_FAKE_NETRC_LOG="$netrc_log" \
+WRTBAK_FAKE_WEBDAV_XML="$legacy_only_xml_file" \
+WRTBAK_FAKE_CURRENT_PROPFIND_FAIL=1 \
+WRTBAK_ALLOW_TEST_HOOKS=1 \
+WRTBAK_FAKE_DEVICE_UID="$device_uid" \
+	"$cli" remote-list --target webdav --json >"$work_dir/list-legacy-only.json"
+
+python3 - "$work_dir/list-legacy-only.json" "$remote_prefix" "$device_uid" "$legacy_device_id" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+remote_prefix = sys.argv[2]
+device_uid = sys.argv[3]
+legacy_device_id = sys.argv[4]
+
+assert data["ok"] is True
+assert data["operation"] == "remote-list"
+assert data["target"] == "webdav"
+paths = [item["path"] for item in data["backups"]]
+legacy_device = f"{remote_prefix}/wrtbak/{legacy_device_id}/wrtbak/2026/legacy-device-id-only.wrtbak"
+assert legacy_device in paths
+assert all(not path.startswith(f"{remote_prefix}/devices/{device_uid}/") for path in paths)
+by_path = {item["path"]: item for item in data["backups"]}
+assert by_path[legacy_device]["legacy"] is True
+assert by_path[legacy_device]["filename"] == "legacy-device-id-only.wrtbak"
+assert by_path[legacy_device]["format"] == "wrtbak"
+assert by_path[legacy_device]["size"] == 19
 PY
 
 if PATH="$bin_dir:$PATH" \
@@ -189,6 +365,8 @@ if PATH="$bin_dir:$PATH" \
 	WRTBAK_FAKE_NETRC_LOG="$netrc_log" \
 	WRTBAK_FAKE_WEBDAV_XML="$xml_file" \
 	WRTBAK_FAKE_PROPFIND_FAIL=1 \
+	WRTBAK_ALLOW_TEST_HOOKS=1 \
+	WRTBAK_FAKE_DEVICE_UID="$device_uid" \
 	"$cli" remote-list --target webdav --json >"$work_dir/list-fail.json"; then
 	echo "remote-list should fail when PROPFIND fails" >&2
 	exit 1

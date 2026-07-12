@@ -16,11 +16,19 @@ trap cleanup EXIT HUP INT TERM
 
 mkdir -p \
 	"$bin_dir" \
+	"$fixture_root/tmp/sysinfo" \
+	"$fixture_root/sys/class/net/br-lan" \
 	"$fixture_root/etc/config" \
+	"$fixture_root/etc/hotplug.d/firewall" \
+	"$fixture_root/etc/nftables.d" \
 	"$fixture_root/etc/nikki/profiles" \
+	"$fixture_root/etc/dae" \
 	"$fixture_root/etc/mosdns" \
 	"$fixture_root/etc/wireguard" \
 	"$fixture_root/etc/dropbear"
+
+printf 'Detect Fixture Board\n' >"$fixture_root/tmp/sysinfo/board_name"
+printf '02:11:22:33:44:55\n' >"$fixture_root/sys/class/net/br-lan/address"
 
 cat >"$bin_dir/apk" <<'EOT'
 #!/bin/sh
@@ -29,6 +37,7 @@ if [ "$1" = "info" ]; then
 luci-app-ddns-go
 luci-app-mosdns
 luci-app-nikki
+luci-app-daed
 luci-app-tailscale-community
 luci-app-upnp
 wireguard-tools
@@ -63,6 +72,19 @@ config defaults
 	option input 'REJECT'
 EOT
 
+cat >"$fixture_root/etc/firewall.user" <<'EOT'
+# custom firewall script
+EOT
+
+cat >"$fixture_root/etc/nftables.d/20-custom.nft" <<'EOT'
+table inet fixture_custom {}
+EOT
+
+cat >"$fixture_root/etc/hotplug.d/firewall/90-fixture" <<'EOT'
+#!/bin/sh
+echo fixture firewall hotplug
+EOT
+
 cat >"$fixture_root/etc/config/wireless" <<'EOT'
 config wifi-device 'radio0'
 	option disabled '0'
@@ -75,6 +97,16 @@ EOT
 
 cat >"$fixture_root/etc/nikki/profiles/default.yaml" <<'EOT'
 proxy: placeholder
+EOT
+
+cat >"$fixture_root/etc/config/dae" <<'EOT'
+config dae 'config'
+	option enabled '0'
+EOT
+
+cat >"$fixture_root/etc/dae/final.yaml" <<'EOT'
+global:
+  log_level: info
 EOT
 
 cat >"$fixture_root/etc/config/mosdns" <<'EOT'
@@ -110,10 +142,12 @@ items = {item["id"]: item for item in data["items"]}
 for required in [
     "core-system",
     "network",
+    "firewall-extra",
     "wireless",
     "dropbear",
     "ddns-go",
     "nikki",
+    "dae",
     "mosdns",
     "tailscale",
     "wireguard",
@@ -124,22 +158,36 @@ for required in [
 assert items["nikki"]["installed"] is True
 assert "/etc/config/nikki" in items["nikki"]["paths"]
 assert "/etc/nikki" in items["nikki"]["paths"]
+assert items["dae"]["installed"] is True
+assert items["dae"]["sensitive"] is True
+assert "/etc/config/dae" in items["dae"]["paths"]
+assert "/etc/dae" in items["dae"]["paths"]
 assert items["wireguard"]["sensitive"] is True
 assert "/etc/wireguard" in items["wireguard"]["paths"]
+assert items["firewall-extra"]["known"] is True
+assert items["firewall-extra"]["sensitive"] is True
+assert "/etc/firewall.user" in items["firewall-extra"]["paths"]
+assert "/etc/nftables.d" in items["firewall-extra"]["paths"]
+assert "/etc/hotplug.d/firewall" in items["firewall-extra"]["paths"]
 assert items["luci-app-upnp"]["known"] is False
 PY
 
 PATH="$bin_dir:$PATH" \
 WRTBAK_ROOT="$fixture_root" \
 WRTBAK_LIBDIR="$libdir" \
-	"$cli" create --profile selected --items core-system,nikki,wireguard --output "$archive"
+	"$cli" create --profile selected --items core-system,nikki,dae,wireguard,firewall-extra --output "$archive"
 
 tar tzf "$archive" >"$work_dir/archive.list"
 grep -q '^rootfs/etc/config/system$' "$work_dir/archive.list"
 grep -q '^rootfs/etc/config/nikki$' "$work_dir/archive.list"
 grep -q '^rootfs/etc/nikki/profiles/default.yaml$' "$work_dir/archive.list"
+grep -q '^rootfs/etc/config/dae$' "$work_dir/archive.list"
+grep -q '^rootfs/etc/dae/final.yaml$' "$work_dir/archive.list"
 grep -q '^rootfs/etc/config/network$' "$work_dir/archive.list"
 grep -q '^rootfs/etc/wireguard/wg0.conf$' "$work_dir/archive.list"
+grep -q '^rootfs/etc/firewall.user$' "$work_dir/archive.list"
+grep -q '^rootfs/etc/nftables.d/20-custom.nft$' "$work_dir/archive.list"
+grep -q '^rootfs/etc/hotplug.d/firewall/90-fixture$' "$work_dir/archive.list"
 
 if grep -q '^rootfs/etc/config/mosdns$' "$work_dir/archive.list"; then
 	echo "unselected mosdns item should not be archived" >&2

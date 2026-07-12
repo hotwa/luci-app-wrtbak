@@ -192,6 +192,7 @@ wrtbak_create_archive() {
 
 	[ -n "$wrtbak_profile" ] || wrtbak_die "missing profile"
 	[ -n "$wrtbak_output" ] || wrtbak_die "missing output file"
+	wrtbak_identity_load_current || wrtbak_die "identity_unusable"
 
 	wrtbak_output_abs=$(wrtbak_abs_path "$wrtbak_output")
 	wrtbak_output_dir=$(dirname -- "$wrtbak_output_abs")

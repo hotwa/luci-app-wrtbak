@@ -19,23 +19,143 @@ grep -Fq '"luci-app-wrtbak"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak detect --json"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak remote-status --json"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak remote-list *"' "$acl_file"
+grep -Fq '"/usr/bin/wrtbak firstboot-status --json"' "$acl_file"
+grep -Fq '"/usr/bin/wrtbak firstboot-candidates *"' "$acl_file"
+grep -Fq '"/usr/bin/wrtbak firstboot-prepare *"' "$acl_file"
+grep -Fq '"/usr/bin/wrtbak proxy-status --json"' "$acl_file"
+grep -Fq '"/usr/bin/wrtbak proxy-candidates *"' "$acl_file"
+grep -Fq '"/usr/bin/wrtbak proxy-prepare *"' "$acl_file"
+grep -Fq '"/usr/bin/wrtbak firstboot-complete --json"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak remote-test *"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak remote-upload *"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak remote-delete *"' "$acl_file"
+grep -Fq '"/usr/bin/wrtbak firstboot-apply *"' "$acl_file"
+grep -Fq '"/usr/bin/wrtbak proxy-apply *"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak schedule-apply --json"' "$acl_file"
 grep -Fq '"wrtbak"' "$acl_file"
 grep -Fq '"/usr/bin/wrtbak create-download *"' "$acl_file"
-grep -Fq '"/tmp/wrtbak/*"' "$acl_file"
+! grep -Fq '"/tmp/wrtbak/*"' "$acl_file"
+! grep -Fq '"/root/*"' "$acl_file"
+! grep -Fq '"/root/wrtbak/*"' "$acl_file"
+grep -Fq '"/tmp/wrtbak/downloads/*.wrtbak"' "$acl_file"
+grep -Fq '"/tmp/wrtbak/downloads/*.sysupgrade.tar.gz"' "$acl_file"
+grep -Fq '"/tmp/wrtbak/restore-cache/*"' "$acl_file"
+! grep -Fq '"/root/wrtbak/pre-restore/*"' "$acl_file"
+! grep -Fq '"/root/wrtbak/receipts/*"' "$acl_file"
+! grep -Fq '"/tmp/wrtbak/*.wrtbak"' "$acl_file"
+! grep -Fq '"/tmp/wrtbak/*.sysupgrade.tar.gz"' "$acl_file"
+! grep -Fq '"/tmp/wrtbak/restore-logs/*"' "$acl_file"
+! grep -Fq '"/tmp/wrtbak/*.remote.json"' "$acl_file"
+! grep -Fq '"/tmp/wrtbak/*.receipt.json"' "$acl_file"
+
+python3 - "$acl_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    acl = json.load(handle)["luci-app-wrtbak"]
+
+read_file = acl["read"]["file"]
+write_file = acl["write"]["file"]
+
+for command in [
+    "/usr/bin/wrtbak remote-download *",
+    "/usr/bin/wrtbak restore-prepare *",
+    "/usr/bin/wrtbak firstboot-status --json",
+    "/usr/bin/wrtbak firstboot-candidates *",
+    "/usr/bin/wrtbak firstboot-prepare *",
+    "/usr/bin/wrtbak proxy-status --json",
+    "/usr/bin/wrtbak proxy-candidates *",
+    "/usr/bin/wrtbak proxy-prepare *",
+    "/usr/bin/wrtbak firstboot-complete --json",
+]:
+    assert command in read_file, command
+    assert read_file[command] == ["exec"], command
+    assert command not in write_file, command
+
+for command in [
+    "/usr/bin/wrtbak restore-prebackup *",
+    "/usr/bin/wrtbak restore-apply *",
+    "/usr/bin/wrtbak restore-sysupgrade *",
+    "/usr/bin/wrtbak firstboot-apply *",
+    "/usr/bin/wrtbak proxy-apply *",
+]:
+    assert command in write_file, command
+    assert write_file[command] == ["exec"], command
+    assert command not in read_file, command
+
+for pattern in [
+    "/tmp/wrtbak/downloads/*.wrtbak",
+    "/tmp/wrtbak/downloads/*.sysupgrade.tar.gz",
+    "/tmp/wrtbak/restore-cache/*",
+]:
+    assert read_file.get(pattern) == ["read", "stat"], pattern
+
+for forbidden in [
+    "/tmp/wrtbak/*",
+    "/root/*",
+    "/root/wrtbak/*",
+    "/root/wrtbak/pre-restore/*",
+    "/root/wrtbak/receipts/*",
+    "/tmp/wrtbak/*.wrtbak",
+    "/tmp/wrtbak/*.sysupgrade.tar.gz",
+    "/tmp/wrtbak/restore-logs/*",
+    "/tmp/wrtbak/*.remote.json",
+    "/tmp/wrtbak/*.receipt.json",
+]:
+    assert forbidden not in read_file, forbidden
+PY
 
 grep -Fq "'require uci'" "$view_file"
 grep -Fq "runWrtbak([ 'detect', '--json' ])" "$view_file"
 grep -Fq "runWrtbak([ 'remote-status', '--json' ])" "$view_file"
+grep -Fq "runWrtbak([ 'firstboot-status', '--json' ])" "$view_file"
+grep -Fq "runWrtbak([ 'proxy-status', '--json' ])" "$view_file"
 grep -Fq "runWrtbak([ 'create-download'" "$view_file"
 grep -Fq "runWrtbak([ 'remote-test'" "$view_file"
 grep -Fq "runWrtbak([ 'remote-upload'" "$view_file"
 grep -Fq "runWrtbak([ 'remote-list'" "$view_file"
 grep -Fq "runWrtbak([ 'remote-delete'" "$view_file"
+grep -Fq "runWrtbak([ 'remote-download'" "$view_file"
+grep -Fq "runWrtbak([ 'restore-prepare'" "$view_file"
+grep -Fq "runWrtbak([ 'restore-prebackup'" "$view_file"
+grep -Fq "runWrtbak([ 'restore-apply'" "$view_file"
+grep -Fq "runWrtbak([ 'restore-sysupgrade'" "$view_file"
+grep -Fq "runWrtbak([ 'firstboot-candidates', '--target'" "$view_file"
+grep -Fq "runWrtbak([ 'firstboot-prepare', '--target'" "$view_file"
+grep -Fq "runWrtbak([ 'firstboot-apply', '--input'" "$view_file"
+grep -Fq "runWrtbak([ 'firstboot-complete', '--json' ])" "$view_file"
+grep -Fq "runWrtbak([ 'proxy-candidates', '--target'" "$view_file"
+grep -Fq "runWrtbak([ 'proxy-prepare', '--target'" "$view_file"
+grep -Fq "runWrtbak([ 'proxy-apply', '--proxy'" "$view_file"
 grep -Fq "runWrtbak([ 'schedule-apply', '--json' ])" "$view_file"
+grep -Fq "RESTORE" "$view_file"
+grep -Fq "wrtbak-firstboot-panel" "$view_file"
+grep -Fq "wrtbak-firstboot-qr" "$view_file"
+grep -Fq "wrtbak-firstboot-local-link" "$view_file"
+grep -Fq "wrtbak-firstboot-candidates" "$view_file"
+grep -Fq "wrtbak-firstboot-plan" "$view_file"
+grep -Fq "wrtbak-firstboot-confirm" "$view_file"
+grep -Fq "wrtbak-restore-panel" "$view_file"
+grep -Fq "wrtbak-proxy-panel" "$view_file"
+grep -Fq "wrtbak-proxy-candidates" "$view_file"
+grep -Fq "proxyArtifacts.enabled" "$view_file"
+grep -Fq "selected.scope" "$view_file"
+grep -Fq "'--confirm', 'APPLY'" "$view_file"
+grep -Fq "health_check_failed" "$view_file"
+grep -Fq "service_stopped" "$view_file"
+grep -Fq "restoreState.phase === 'prebackup_ready'" "$view_file"
+grep -Fq "confirmationInput.value === 'RESTORE'" "$view_file"
+grep -Fq "done_marker_uid_mismatch" "$view_file"
+grep -Fq "no_default_route" "$view_file"
+grep -Fq "dns_not_ready" "$view_file"
+grep -Fq "time_not_ready" "$view_file"
+grep -Fq "legacy_backup_read_only" "$view_file"
+grep -Fq "current_device_only" "$view_file"
+grep -Fq "blocked_restart_services" "$view_file"
+grep -Fq "sysupgrade_failed" "$view_file"
+grep -Fq "wrtbak-sysupgrade-execute" "$view_file"
+grep -Fq "wrtbak-restore-unknown" "$view_file"
 grep -Fq "uci.set('wrtbak', 'webdav'" "$view_file"
 grep -Fq "uci.set('wrtbak', 's3'" "$view_file"
 grep -Fq "uci.set('wrtbak', 'auto'" "$view_file"
@@ -51,11 +171,60 @@ grep -Fq "Previous" "$view_file"
 grep -Fq "Next" "$view_file"
 grep -Fq "showDownloadResult" "$view_file"
 grep -Fq "Download" "$view_file"
+grep -Fq "backup.legacy === true" "$view_file"
+grep -Fq "wrtbak-legacy-backup" "$view_file"
+grep -Fq "Restore and delete disabled" "$view_file"
 grep -Fq "handleSaveApply: null" "$view_file"
 grep -Fq "handleSave: null" "$view_file"
 grep -Fq "handleReset: null" "$view_file"
 grep -Fq "wrtbak-profile" "$view_file"
 grep -Fq "wrtbak_profile" "$view_file"
 grep -Fq "[A-Za-z0-9._\\\\-]+" "$view_file"
+
+python3 - "$view_file" <<'PY'
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    view = handle.read()
+
+for snippet in [
+    "'remote-download', '--target', selectedTarget(), '--path'",
+    "'restore-prepare', '--input'",
+    "'restore-prebackup', '--profile', 'pre-restore', '--items', 'all', '--format', 'wrtbak'",
+    "'restore-apply', '--input'",
+    "'--prebackup', restoreState.prebackup.path",
+    "'--confirm', 'RESTORE'",
+    "'--restart-services', '0'",
+    "'restore-sysupgrade', '--input'",
+    "'--execute', '0'",
+    "'--execute', '1'",
+    "applyButton.disabled = restoreState.phase !== 'prebackup_ready'",
+    "confirmationInput.value === 'RESTORE'",
+    "sysupgrade_exit_code",
+    "wrtbak-restore-unknown",
+    "restoreState.phase = 'idle'",
+    "firstbootState.phase = 'idle'",
+    "firstbootApplyButton.disabled = firstbootState.phase !== 'prebackup_ready'",
+    "firstbootConfirmInput.value === 'RESTORE'",
+    "'restore-prebackup', '--profile', 'pre-restore', '--items', 'all', '--format', 'wrtbak', '--require-remote', '0'",
+    "'--source-backup-key', firstbootState.selectedBackup.path",
+]:
+    assert snippet in view, snippet
+
+assert "'--legacy-inspect'" not in view
+
+legacy_marker = "if (backup.legacy === true)"
+else_marker = "} else {"
+assert legacy_marker in view
+legacy_start = view.index(legacy_marker)
+legacy_end = view.index(else_marker, legacy_start)
+legacy_branch = view[legacy_start:legacy_end]
+assert "onDelete" not in legacy_branch
+assert "onRestore" not in legacy_branch
+
+non_legacy_branch = view[legacy_end:view.index("table.appendChild", legacy_end)]
+assert "onDelete(backup)" in non_legacy_branch
+assert "onRestore(backup)" in non_legacy_branch
+PY
 
 echo "LuCI layout test passed"

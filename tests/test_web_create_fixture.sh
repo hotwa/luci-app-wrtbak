@@ -13,7 +13,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-mkdir -p "$fixture_root/etc/config" "$output_dir"
+mkdir -p "$fixture_root/etc/config" "$fixture_root/tmp/sysinfo" "$fixture_root/sys/class/net/br-lan" "$output_dir"
 
 cat >"$fixture_root/etc/config/wrtbak" <<EOT
 config wrtbak 'main'
@@ -25,6 +25,8 @@ cat >"$fixture_root/etc/config/system" <<'EOT'
 config system
 	option hostname 'web-router'
 EOT
+printf 'Web Create Board\n' >"$fixture_root/tmp/sysinfo/board_name"
+printf '02:11:22:33:44:55\n' >"$fixture_root/sys/class/net/br-lan/address"
 
 assert_reject() {
 	if "$@" >"$work_dir/reject.out" 2>"$work_dir/reject.err"; then
@@ -48,10 +50,13 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     data = json.load(handle)
 
 output_dir = sys.argv[2]
+expected_dir = os.path.join(output_dir, "downloads")
 assert data["format"] == "wrtbak"
 assert data["filename"].startswith("web-test-")
 assert data["filename"].endswith(".wrtbak")
-assert data["path"] == os.path.join(output_dir, data["filename"])
+assert data["path"].startswith(expected_dir + os.sep)
+assert data["path"] == os.path.join(expected_dir, data["filename"])
+assert data["path"].endswith(".wrtbak") or data["path"].endswith(".sysupgrade.tar.gz")
 assert data["size"] > 0
 assert os.path.isfile(data["path"])
 PY
@@ -73,9 +78,12 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     data = json.load(handle)
 
 output_dir = sys.argv[2]
+expected_dir = os.path.join(output_dir, "downloads")
 assert data["format"] == "sysupgrade"
 assert data["filename"].endswith(".sysupgrade.tar.gz")
-assert data["path"] == os.path.join(output_dir, data["filename"])
+assert data["path"].startswith(expected_dir + os.sep)
+assert data["path"] == os.path.join(expected_dir, data["filename"])
+assert data["path"].endswith(".wrtbak") or data["path"].endswith(".sysupgrade.tar.gz")
 assert data["size"] > 0
 assert os.path.isfile(data["path"])
 PY

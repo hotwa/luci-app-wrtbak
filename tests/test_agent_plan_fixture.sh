@@ -12,7 +12,10 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-mkdir -p "$fixture_root/etc/config"
+mkdir -p \
+	"$fixture_root/etc/config" \
+	"$fixture_root/etc/hotplug.d/firewall" \
+	"$fixture_root/etc/nftables.d"
 
 cat >"$fixture_root/etc/config/system" <<'EOT'
 config system
@@ -23,6 +26,19 @@ cat >"$fixture_root/etc/config/nikki" <<'EOT'
 config nikki 'config'
 	option enabled '1'
 	option secret 'do-not-print-this'
+EOT
+
+cat >"$fixture_root/etc/firewall.user" <<'EOT'
+# custom fw3 compatibility rule
+EOT
+
+cat >"$fixture_root/etc/nftables.d/10-custom.nft" <<'EOT'
+table inet custom_wrtbak_test {}
+EOT
+
+cat >"$fixture_root/etc/hotplug.d/firewall/99-custom" <<'EOT'
+#!/bin/sh
+echo firewall hotplug
 EOT
 
 assert_reject() {
@@ -77,6 +93,39 @@ PY
 
 WRTBAK_ROOT="$fixture_root" \
 WRTBAK_LIBDIR="$libdir" \
+	"$cli" plan --profile agent-test --items firewall-extra --format wrtbak --json >"$work_dir/plan-firewall-extra.json"
+
+python3 - "$work_dir/plan-firewall-extra.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+
+items = {item["id"]: item for item in data["items"]}
+assert set(items) == {"firewall-extra"}
+assert items["firewall-extra"]["known"] is True
+assert items["firewall-extra"]["sensitive"] is True
+assert "/etc/firewall.user" in items["firewall-extra"]["paths"]
+assert "/etc/nftables.d" in items["firewall-extra"]["paths"]
+assert "/etc/hotplug.d/firewall" in items["firewall-extra"]["paths"]
+
+paths = {(entry["item_id"], entry["path"]): entry for entry in data["paths"]}
+assert paths[("firewall-extra", "/etc/firewall.user")]["exists"] is True
+assert paths[("firewall-extra", "/etc/firewall.user")]["type"] == "file"
+assert paths[("firewall-extra", "/etc/nftables.d")]["exists"] is True
+assert paths[("firewall-extra", "/etc/nftables.d")]["type"] == "directory"
+assert paths[("firewall-extra", "/etc/hotplug.d/firewall")]["exists"] is True
+assert paths[("firewall-extra", "/etc/hotplug.d/firewall")]["type"] == "directory"
+
+assert data["summary"]["requested_items"] == 1
+assert data["summary"]["existing_paths"] == 3
+assert data["summary"]["missing_paths"] == 0
+assert data["summary"]["sensitive_items"] == 1
+PY
+
+WRTBAK_ROOT="$fixture_root" \
+WRTBAK_LIBDIR="$libdir" \
 	"$cli" plan --profile agent-test --items all --format sysupgrade --json >"$work_dir/plan-all.json"
 
 python3 - "$work_dir/plan-all.json" <<'PY'
@@ -90,6 +139,7 @@ ids = {item["id"] for item in data["items"]}
 assert data["format"] == "sysupgrade"
 assert "core-system" in ids
 assert "network" in ids
+assert "firewall-extra" in ids
 assert "wireless" in ids
 assert data["summary"]["requested_items"] == len(ids)
 PY

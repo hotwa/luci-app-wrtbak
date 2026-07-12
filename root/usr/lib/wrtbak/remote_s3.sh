@@ -32,7 +32,21 @@ wrtbak_s3_make_config() {
 wrtbak_s3_rclone() {
 	wrtbak_config=$1
 	shift
-	rclone --config "$wrtbak_config" "$@"
+	case "${WRTBAK_S3_FORCE_DIRECT:-0}" in
+		1|true|yes|on|direct)
+			wrtbak_proxy_url=
+			;;
+		*)
+			wrtbak_proxy_url=$(wrtbak_main_option proxy_url "")
+			;;
+	esac
+	if [ -n "$wrtbak_proxy_url" ]; then
+		HTTP_PROXY="$wrtbak_proxy_url" HTTPS_PROXY="$wrtbak_proxy_url" ALL_PROXY="$wrtbak_proxy_url" \
+		http_proxy="$wrtbak_proxy_url" https_proxy="$wrtbak_proxy_url" all_proxy="$wrtbak_proxy_url" \
+			rclone --config "$wrtbak_config" "$@"
+	else
+		rclone --config "$wrtbak_config" "$@"
+	fi
 }
 
 
@@ -63,7 +77,7 @@ wrtbak_s3_probe() {
 	wrtbak_secret_key=$5
 	wrtbak_root_path=$6
 	wrtbak_force_path_style=$7
-	wrtbak_device_id=$8
+	wrtbak_device_uid=$8
 	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-s3.XXXXXX") || return 1
 	wrtbak_config=$(wrtbak_s3_make_config "$wrtbak_tmp" "$wrtbak_endpoint" "$wrtbak_region" "$wrtbak_access_key" "$wrtbak_secret_key" "$wrtbak_force_path_style") || {
 		rm -rf "$wrtbak_tmp"
@@ -75,7 +89,7 @@ wrtbak_s3_probe() {
 		return 1
 	}
 
-	wrtbak_remote_path=$(wrtbak_join_remote_path "$wrtbak_root_path" wrtbak "$wrtbak_device_id" ".probe") || {
+	wrtbak_remote_path=$(wrtbak_join_remote_path "$wrtbak_root_path" devices "$wrtbak_device_uid" ".probe") || {
 		rm -rf "$wrtbak_tmp"
 		return 1
 	}
@@ -97,25 +111,21 @@ wrtbak_s3_probe() {
 	printf '%s\n' "$wrtbak_remote_path"
 }
 
-wrtbak_s3_list_raw() {
+wrtbak_s3_list_prefix_raw() {
 	wrtbak_endpoint=$1
 	wrtbak_region=$2
 	wrtbak_bucket=$3
 	wrtbak_access_key=$4
 	wrtbak_secret_key=$5
-	wrtbak_root_path=$6
-	wrtbak_force_path_style=$7
-	wrtbak_device_id=$8
+	wrtbak_force_path_style=$6
+	wrtbak_list_prefix=$7
+	wrtbak_legacy_flag=$8
 	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-s3-list.XXXXXX") || return 1
 	wrtbak_config=$(wrtbak_s3_make_config "$wrtbak_tmp" "$wrtbak_endpoint" "$wrtbak_region" "$wrtbak_access_key" "$wrtbak_secret_key" "$wrtbak_force_path_style") || {
 		rm -rf "$wrtbak_tmp"
 		return 1
 	}
-	wrtbak_device_prefix=$(wrtbak_join_remote_path "$wrtbak_root_path" wrtbak "$wrtbak_device_id") || {
-		rm -rf "$wrtbak_tmp"
-		return 1
-	}
-	wrtbak_remote_prefix_ref=$(wrtbak_s3_remote_ref "$wrtbak_bucket" "$wrtbak_device_prefix") || {
+	wrtbak_remote_prefix_ref=$(wrtbak_s3_remote_ref "$wrtbak_bucket" "$wrtbak_list_prefix") || {
 		rm -rf "$wrtbak_tmp"
 		return 1
 	}
@@ -130,12 +140,16 @@ wrtbak_s3_list_raw() {
 {/g' | while IFS= read -r wrtbak_block || [ -n "$wrtbak_block" ]; do
 		wrtbak_path=$(printf '%s\n' "$wrtbak_block" | sed -n 's/.*"Path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
 		[ -n "$wrtbak_path" ] || continue
+		wrtbak_list_root=${wrtbak_list_prefix%%/*}
 		case "$wrtbak_path" in
-			"$wrtbak_device_prefix"/*)
+			"$wrtbak_list_prefix"/*)
 				wrtbak_remote_path=$wrtbak_path
 				;;
+			"$wrtbak_list_root"/*)
+				continue
+				;;
 			*)
-				wrtbak_remote_path=$(wrtbak_join_remote_path "$wrtbak_device_prefix" "$wrtbak_path") || continue
+				wrtbak_remote_path=$(wrtbak_join_remote_path "$wrtbak_list_prefix" "$wrtbak_path") || continue
 				;;
 		esac
 		case "$wrtbak_remote_path" in
@@ -153,10 +167,95 @@ wrtbak_s3_list_raw() {
 		[ -n "$wrtbak_filename" ] || wrtbak_filename=${wrtbak_remote_path##*/}
 		wrtbak_size=$(printf '%s\n' "$wrtbak_block" | sed -n 's/.*"Size"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
 		wrtbak_modified=$(printf '%s\n' "$wrtbak_block" | sed -n 's/.*"ModTime"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-		printf '%s\t%s\t%s\t%s\t%s\n' "$wrtbak_remote_path" "$wrtbak_filename" "$wrtbak_format" "$wrtbak_size" "$wrtbak_modified"
+		printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$wrtbak_remote_path" "$wrtbak_filename" "$wrtbak_format" "$wrtbak_size" "$wrtbak_modified" "$wrtbak_legacy_flag"
 	done
 
 	rm -rf "$wrtbak_tmp"
+}
+
+wrtbak_s3_list_raw() {
+	wrtbak_endpoint=$1
+	wrtbak_region=$2
+	wrtbak_bucket=$3
+	wrtbak_access_key=$4
+	wrtbak_secret_key=$5
+	wrtbak_root_path=$6
+	wrtbak_force_path_style=$7
+	wrtbak_device_uid=$8
+	wrtbak_device_prefix=$(wrtbak_join_remote_path "$wrtbak_root_path" devices "$wrtbak_device_uid") || return 1
+	wrtbak_s3_list_prefix_raw "$wrtbak_endpoint" "$wrtbak_region" "$wrtbak_bucket" "$wrtbak_access_key" "$wrtbak_secret_key" "$wrtbak_force_path_style" "$wrtbak_device_prefix" false
+}
+
+wrtbak_s3_legacy_list_raw() {
+	wrtbak_endpoint=$1
+	wrtbak_region=$2
+	wrtbak_bucket=$3
+	wrtbak_access_key=$4
+	wrtbak_secret_key=$5
+	wrtbak_root_path=$6
+	wrtbak_force_path_style=$7
+	wrtbak_device_alias=$8
+	wrtbak_legacy_prefix=$(wrtbak_join_remote_path "$wrtbak_root_path" wrtbak "$wrtbak_device_alias") || return 1
+	wrtbak_s3_list_prefix_raw "$wrtbak_endpoint" "$wrtbak_region" "$wrtbak_bucket" "$wrtbak_access_key" "$wrtbak_secret_key" "$wrtbak_force_path_style" "$wrtbak_legacy_prefix" true
+}
+
+wrtbak_s3_stat_file() {
+	wrtbak_endpoint=$1
+	wrtbak_region=$2
+	wrtbak_bucket=$3
+	wrtbak_access_key=$4
+	wrtbak_secret_key=$5
+	wrtbak_force_path_style=$6
+	wrtbak_remote_path=$7
+	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-s3-stat.XXXXXX") || return 1
+	wrtbak_config=$(wrtbak_s3_make_config "$wrtbak_tmp" "$wrtbak_endpoint" "$wrtbak_region" "$wrtbak_access_key" "$wrtbak_secret_key" "$wrtbak_force_path_style") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_remote_file_ref=$(wrtbak_s3_remote_ref "$wrtbak_bucket" "$wrtbak_remote_path") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_json="$wrtbak_tmp/lsjson.json"
+
+	if ! wrtbak_s3_rclone "$wrtbak_config" lsjson "$wrtbak_remote_file_ref" > "$wrtbak_json" 2>/dev/null; then
+		rm -rf "$wrtbak_tmp"
+		return 1
+	fi
+
+	wrtbak_line=$(tr '\n' ' ' < "$wrtbak_json")
+	wrtbak_size=$(printf '%s\n' "$wrtbak_line" | sed -n 's/.*"Size"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+	wrtbak_modified=$(printf '%s\n' "$wrtbak_line" | sed -n 's/.*"ModTime"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+	wrtbak_etag=$(printf '%s\n' "$wrtbak_line" | sed -n 's/.*"ETag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+	printf '%s\t%s\t%s\n' "$wrtbak_size" "$wrtbak_modified" "$wrtbak_etag"
+	rm -rf "$wrtbak_tmp"
+}
+
+wrtbak_s3_download_file() {
+	wrtbak_endpoint=$1
+	wrtbak_region=$2
+	wrtbak_bucket=$3
+	wrtbak_access_key=$4
+	wrtbak_secret_key=$5
+	wrtbak_force_path_style=$6
+	wrtbak_remote_path=$7
+	wrtbak_local_path=$8
+	wrtbak_tmp=$(mktemp -d "${TMPDIR:-/tmp}/wrtbak-s3-download.XXXXXX") || return 1
+	wrtbak_config=$(wrtbak_s3_make_config "$wrtbak_tmp" "$wrtbak_endpoint" "$wrtbak_region" "$wrtbak_access_key" "$wrtbak_secret_key" "$wrtbak_force_path_style") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+	wrtbak_remote_file_ref=$(wrtbak_s3_remote_ref "$wrtbak_bucket" "$wrtbak_remote_path") || {
+		rm -rf "$wrtbak_tmp"
+		return 1
+	}
+
+	if ! wrtbak_s3_rclone "$wrtbak_config" copyto "$wrtbak_remote_file_ref" "$wrtbak_local_path" >/dev/null; then
+		rm -rf "$wrtbak_tmp"
+		return 1
+	fi
+	rm -rf "$wrtbak_tmp"
+	return 0
 }
 
 wrtbak_s3_upload_file() {

@@ -33,6 +33,11 @@ This repository contains the public documentation, non-secret examples, and the 
 │           ├── items.sh
 │           ├── manifest.sh
 │           ├── pack.sh
+│           ├── remote.sh
+│           ├── remote_webdav.sh
+│           ├── remote_s3.sh
+│           ├── restore.sh
+│           ├── schedule.sh
 │           ├── web.sh
 │           └── paths.default
 ├── htdocs/
@@ -42,6 +47,8 @@ This repository contains the public documentation, non-secret examples, and the 
 │   ├── test_detect_fixture.sh
 │   ├── test_agent_plan_fixture.sh
 │   ├── test_agent_status_fixture.sh
+│   ├── test_remote_download_fixture.sh
+│   ├── test_restore_apply_fixture.sh
 │   ├── test_restore_plan_fixture.sh
 │   ├── test_luci_layout.sh
 │   └── test_web_create_fixture.sh
@@ -54,7 +61,7 @@ This repository contains the public documentation, non-secret examples, and the 
         └── manifest.json
 ```
 
-The current package provides a shell CLI for archive creation, inspection, installed package detection, selected-item archive generation, LuCI-triggered downloads, `.sysupgrade.tar.gz` export, WebDAV/S3 remote backup operations, cron-based automatic backup scheduling, and read-only agent maintenance planning. Restore planning exists, but automatic restore writes are intentionally not implemented yet.
+The current package provides a shell CLI for archive creation, inspection, installed package detection, selected-item archive generation, LuCI-triggered downloads, `.sysupgrade.tar.gz` export, WebDAV/S3 remote backup operations, cron-based automatic backup scheduling, read-only agent maintenance planning, and confirmed restore operations. Restore writes require a current pre-restore backup receipt and the exact `RESTORE` confirmation token.
 
 ## Runtime Assumptions
 
@@ -67,8 +74,9 @@ The CLI currently expects standard OpenWrt/BusyBox tools to be available:
 - `jsonfilter` for OpenWrt metadata lookup and strict `restore-plan` manifest validation.
 - `curl` for WebDAV probe, upload, list, and delete operations.
 - `rclone` for S3-compatible probe, upload, list, and delete operations.
+- `sysupgrade` for native `.sysupgrade.tar.gz` restore execution when `restore-sysupgrade --execute 1` is used.
 
-The package `Makefile` declares `curl` and `rclone` because those commands are directly invoked by remote backup targets. It does not add explicit `tar` or `gzip` dependencies because OpenWrt package names vary by build profile and BusyBox configuration. Ensure target images include working tar/gzip support before relying on archive creation or export.
+The package `Makefile` declares `curl` and `rclone` because those commands are directly invoked by remote backup targets. It does not add explicit `tar`, `gzip`, or `sysupgrade` dependencies because OpenWrt package names vary by build profile and base images normally provide native restore tooling. Ensure target images include working tar/gzip support before relying on archive creation, export, or restore.
 
 ## Basic Checks
 

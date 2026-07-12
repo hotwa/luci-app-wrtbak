@@ -16,11 +16,16 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 mkdir -p \
+	"$fixture_root/tmp/sysinfo" \
+	"$fixture_root/sys/class/net/br-lan" \
 	"$fixture_root/etc/config" \
 	"$fixture_root/etc/dropbear" \
 	"$fixture_root/etc/nikki/nftables" \
 	"$fixture_root/etc/nikki/profiles" \
 	"$work_dir"
+
+printf 'Fixture CLI Board\n' >"$fixture_root/tmp/sysinfo/board_name"
+printf '02:11:22:33:44:55\n' >"$fixture_root/sys/class/net/br-lan/address"
 
 cat >"$fixture_root/etc/config/system" <<'EOT'
 config system

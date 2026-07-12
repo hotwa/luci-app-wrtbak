@@ -7,14 +7,29 @@
 
 function parseJsonOutput(res) {
 	var text = (res && res.stdout) ? res.stdout.trim() : '';
+	var data = null;
 
-	if (res && res.code)
-		throw new Error((res.stderr || text || _('Command failed')).trim());
+	if (text) {
+		try {
+			data = JSON.parse(text);
+		} catch (err) {
+			if (res && res.code)
+				throw new Error((res.stderr || text || _('Command failed')).trim());
 
-	if (!text)
+			throw err;
+		}
+	}
+
+	if (res && res.code) {
+		var error = new Error((data && data.message) || (res.stderr || text || _('Command failed')).trim());
+		error.data = data;
+		throw error;
+	}
+
+	if (!data)
 		throw new Error(_('Command returned no data'));
 
-	return JSON.parse(text);
+	return data;
 }
 
 function runWrtbak(args) {
@@ -180,7 +195,7 @@ function remoteTargetDriver(target) {
 	return target === 'webdav' ? 'curl' : 'rclone';
 }
 
-function renderBackupRows(table, backups, onDelete) {
+function renderBackupRows(table, backups, onDelete, onRestore) {
 	table.innerHTML = '';
 	table.appendChild(E('tr', { 'class': 'tr table-titles' }, [
 		E('th', { 'class': 'th' }, _('File')),
@@ -198,18 +213,78 @@ function renderBackupRows(table, backups, onDelete) {
 	}
 
 	backups.forEach(function(backup) {
+		var actions;
+
+		if (backup.legacy === true) {
+			actions = [
+				E('span', { 'class': 'cbi-tag wrtbak-legacy-backup' }, _('Legacy')),
+				' ',
+				E('em', {}, _('Restore and delete disabled'))
+			];
+		} else {
+			actions = [
+				E('button', {
+					type: 'button',
+					'class': 'btn cbi-button cbi-button-action',
+					click: function() { onRestore(backup); }
+				}, backup.format === 'sysupgrade' ? _('Restore via sysupgrade') : _('Restore')),
+				' ',
+				E('button', {
+					type: 'button',
+					'class': 'btn cbi-button cbi-button-negative',
+					click: function() { onDelete(backup); }
+				}, _('Delete'))
+			];
+		}
+
 		table.appendChild(E('tr', { 'class': 'tr' }, [
 			E('td', { 'class': 'td' }, E('code', {}, backup.filename || backup.path)),
 			E('td', { 'class': 'td' }, backup.format || '-'),
 			E('td', { 'class': 'td' }, backup.size == null ? '-' : String(backup.size)),
 			E('td', { 'class': 'td' }, backup.modified || '-'),
-			E('td', { 'class': 'td right' }, E('button', {
-				type: 'button',
-				'class': 'btn cbi-button cbi-button-negative',
-				click: function() { onDelete(backup); }
-			}, _('Delete')))
+			E('td', { 'class': 'td right' }, actions)
 		]));
 	});
+}
+
+function replaceChildren(node, children) {
+	node.innerHTML = '';
+
+	(Array.isArray(children) ? children : [ children ]).forEach(function(child) {
+		if (child == null)
+			return;
+
+		node.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
+	});
+}
+
+function statusTag(ok, text) {
+	return E('span', { 'class': ok ? 'cbi-tag cbi-tag-success' : 'cbi-tag cbi-tag-warning' }, text);
+}
+
+function reasonLabel(reason) {
+	switch (reason) {
+	case 'done_marker_uid_mismatch':
+		return 'done_marker_uid_mismatch';
+	case 'no_default_route':
+		return 'no_default_route';
+	case 'dns_not_ready':
+		return 'dns_not_ready';
+	case 'time_not_ready':
+		return 'time_not_ready';
+	case 'legacy_backup_read_only':
+		return 'legacy_backup_read_only';
+	case 'current_device_only':
+		return 'current_device_only';
+	case 'identity_unusable':
+		return 'identity_unusable';
+	default:
+		return reason || '-';
+	}
+}
+
+function jsonBlock(data) {
+	return E('pre', { 'class': 'wrtbak-json-block' }, JSON.stringify(data || {}, null, 2));
 }
 
 return view.extend({
@@ -221,11 +296,21 @@ return view.extend({
 		return Promise.all([
 			runWrtbak([ 'detect', '--json' ]),
 			runWrtbak([ 'remote-status', '--json' ]),
+			runWrtbak([ 'firstboot-status', '--json' ]),
+			runWrtbak([ 'proxy-status', '--json' ]).catch(function(err) {
+				return {
+					ok: false,
+					enabled: false,
+					error: (err && err.message) || String(err)
+				};
+			}),
 			uci.load('wrtbak')
 		]).then(function(results) {
 			return {
 				detect: results[0],
-				remote: results[1]
+				remote: results[1],
+				firstboot: results[2],
+				proxy: results[3]
 			};
 		});
 	},
@@ -234,6 +319,7 @@ return view.extend({
 		var items = Array.isArray(data.detect.items) ? data.detect.items : [];
 		var remoteStatus = data.remote || {};
 		var schedule = remoteStatus.schedule || {};
+		var proxyArtifacts = data.proxy || {};
 		var profile = E('input', {
 			id: 'wrtbak-profile',
 			name: 'wrtbak_profile',
@@ -291,6 +377,32 @@ return view.extend({
 		var resultPanel = E('div', { 'class': 'alert-message info', style: 'display:none' });
 		var remotePanel = E('div', { 'class': 'alert-message info', style: 'display:none' });
 		var remoteTable = E('table', { 'class': 'table wrtbak-remote-table' });
+		var restoreState = { phase: 'idle', target: null, backup: null, download: null, prepare: null, prebackup: null, apply: null, sysupgradePreflight: null, error: null, unknown: false };
+		var restorePanel = E('div', { 'class': 'cbi-section wrtbak-restore-panel' });
+		var confirmationInput = textInput('wrtbak-restore-confirmation', '');
+		var firstbootState = { phase: 'idle', status: data.firstboot || {}, candidates: null, selectedBackup: null, prepare: null, prebackup: null, apply: null, complete: null, error: null };
+		var firstbootPanel = E('div', { 'class': 'cbi-section wrtbak-firstboot-panel' });
+		var firstbootStatusPanel = E('div', { 'class': 'wrtbak-firstboot-status' });
+		var firstbootCandidatesPanel = E('div', { 'class': 'wrtbak-firstboot-candidates' });
+		var firstbootPlanPanel = E('div', { 'class': 'wrtbak-firstboot-plan' });
+		var firstbootConfirmInput = textInput('wrtbak-firstboot-confirmation', '');
+		firstbootConfirmInput.className += ' wrtbak-firstboot-confirm';
+		var proxyState = { phase: 'idle', proxy: 'nikki', candidates: null, selected: null, prepare: null, apply: null, error: null };
+		var proxyPanel = E('div', { 'class': 'cbi-section wrtbak-proxy-panel' });
+		var proxyCandidatesPanel = E('div', { 'class': 'wrtbak-proxy-candidates' });
+		var proxyPlanPanel = E('div', { 'class': 'wrtbak-proxy-plan' });
+		var prebackupButton;
+		var applyButton;
+		var applyAllButton;
+		var sysupgradePreflightButton;
+		var sysupgradeExecuteButton;
+		var firstbootListButton;
+		var firstbootPrebackupButton;
+		var firstbootApplyButton;
+		var proxyNikkiButton;
+		var proxyDaeButton;
+		var proxyApplyButton;
+		var proxyResetButton;
 		var previousButton;
 		var nextButton;
 		var table = E('table', { 'class': 'table' }, [
@@ -390,6 +502,761 @@ return view.extend({
 			return defaultTarget.value || 'default';
 		}
 
+		function restoreInputPath() {
+			return restoreState.download && restoreState.download.local_path;
+		}
+
+		function isSysupgradeRestore() {
+			return restoreState.prepare && restoreState.prepare.format === 'sysupgrade';
+		}
+
+		function canRunConfirmedRestore() {
+			return restoreState.phase === 'prebackup_ready' && confirmationInput.value === 'RESTORE' && restoreState.prebackup && restoreState.prebackup.path;
+		}
+
+		function updateRestoreButtons() {
+			if (!prebackupButton || !applyButton)
+				return;
+
+			prebackupButton.disabled = restoreState.phase !== 'prepared';
+			applyButton.disabled = restoreState.phase !== 'prebackup_ready' || confirmationInput.value !== 'RESTORE' || isSysupgradeRestore();
+			applyAllButton.disabled = restoreState.phase !== 'prebackup_ready' || confirmationInput.value !== 'RESTORE' || isSysupgradeRestore();
+			sysupgradePreflightButton.disabled = restoreState.phase !== 'prebackup_ready' || confirmationInput.value !== 'RESTORE' || !isSysupgradeRestore();
+			sysupgradeExecuteButton.disabled = restoreState.phase !== 'prebackup_ready' || confirmationInput.value !== 'RESTORE' || !restoreState.sysupgradePreflight || !isSysupgradeRestore();
+		}
+
+		function resetRestoreState() {
+			restoreState.phase = 'idle';
+			restoreState.target = null;
+			restoreState.backup = null;
+			restoreState.download = null;
+			restoreState.prepare = null;
+			restoreState.prebackup = null;
+			restoreState.apply = null;
+			restoreState.sysupgradePreflight = null;
+			restoreState.error = null;
+			restoreState.unknown = false;
+			confirmationInput.value = '';
+			renderRestorePanel();
+		}
+
+		function setRestorePhase(phase) {
+			restoreState.phase = phase;
+			renderRestorePanel();
+		}
+
+		function appendJsonList(parent, title, values) {
+			var list = Array.isArray(values) ? values : [];
+			parent.appendChild(E('p', {}, [
+				E('strong', {}, title),
+				': ',
+				list.length ? list.join(', ') : '-'
+			]));
+		}
+
+		function appendRestorePlan(parent, prepare) {
+			var plan = prepare && prepare.plan ? prepare.plan : {};
+			var paths = Array.isArray(plan.paths) ? plan.paths : [];
+
+			parent.appendChild(E('p', {}, [
+				E('strong', {}, _('Archive')),
+				': ',
+				(prepare && prepare.format) || '-',
+				' ',
+				(prepare && prepare.archive && prepare.archive.filename) || ''
+			]));
+			parent.appendChild(E('p', {}, [
+				E('strong', {}, _('Source')),
+				': ',
+				(prepare && prepare.source_device && prepare.source_device.hostname) || '-',
+				' / ',
+				(prepare && prepare.source_device && prepare.source_device.board) || '-'
+			]));
+			parent.appendChild(E('p', {}, [
+				E('strong', {}, _('Files')),
+				': ',
+				String(plan.file_count || 0),
+				' / ',
+				String(plan.total_bytes || 0),
+				' bytes'
+			]));
+			appendJsonList(parent, _('Restart services'), plan.restart_services);
+
+			if (prepare && prepare.compatibility && Array.isArray(prepare.compatibility.warnings) && prepare.compatibility.warnings.length) {
+				parent.appendChild(E('ul', { 'class': 'wrtbak-restore-warnings' }, prepare.compatibility.warnings.map(function(warning) {
+					return E('li', {}, warning.message || warning.code || String(warning));
+				})));
+			}
+
+			if (paths.length) {
+				parent.appendChild(E('table', { 'class': 'table wrtbak-restore-paths' }, [
+					E('tr', { 'class': 'tr table-titles' }, [
+						E('th', { 'class': 'th' }, _('Path')),
+						E('th', { 'class': 'th' }, _('Type')),
+						E('th', { 'class': 'th' }, _('Action'))
+					])
+				]));
+				var pathTable = parent.lastChild;
+				paths.slice(0, 20).forEach(function(path) {
+					pathTable.appendChild(E('tr', { 'class': 'tr' }, [
+						E('td', { 'class': 'td' }, E('code', {}, path.path || '-')),
+						E('td', { 'class': 'td' }, path.type || '-'),
+						E('td', { 'class': 'td' }, path.action || '-')
+					]));
+				});
+			}
+		}
+
+		function appendApplyResult(parent, result) {
+			if (!result)
+				return;
+
+			if (result.code === 'sysupgrade_failed') {
+				parent.appendChild(E('div', { 'class': 'alert-message warning' }, String.format('%s: %s', _('Sysupgrade failed'), result.sysupgrade_exit_code)));
+				return;
+			}
+
+			if (result.operation === 'restore-sysupgrade') {
+				parent.appendChild(E('p', {}, [
+					E('strong', {}, _('Sysupgrade')),
+					': ',
+					result.status || '-',
+					' / ',
+					_('exit'),
+					' ',
+					String(result.sysupgrade_exit_code == null ? '-' : result.sysupgrade_exit_code)
+				]));
+				return;
+			}
+
+			parent.appendChild(E('p', {}, [
+				E('strong', {}, _('Written')),
+				': ',
+				String(result.written_count || 0),
+				' / ',
+				_('skipped'),
+				' ',
+				String(result.skipped_count || 0)
+			]));
+			appendJsonList(parent, 'blocked_restart_services', result.blocked_restart_services);
+			appendJsonList(parent, _('Restarted services'), result.restarted_services);
+			appendJsonList(parent, _('Missing from archive'), result.missing_from_archive);
+			if (result.restore_log)
+				parent.appendChild(E('p', {}, [ E('strong', {}, _('Restore log')), ': ', E('code', {}, result.restore_log) ]));
+		}
+
+		function firstbootConfirmed() {
+			return firstbootConfirmInput.value === 'RESTORE';
+		}
+
+		function firstbootInputPath() {
+			return firstbootState.prepare && firstbootState.prepare.download && firstbootState.prepare.download.path;
+		}
+
+		function updateFirstbootButtons() {
+			if (!firstbootPrebackupButton || !firstbootApplyButton)
+				return;
+
+			firstbootPrebackupButton.disabled = firstbootState.phase !== 'prepared';
+			firstbootApplyButton.disabled = firstbootState.phase !== 'prebackup_ready' || !firstbootConfirmed() || !firstbootState.prebackup || !firstbootInputPath();
+		}
+
+		function resetFirstbootState() {
+			firstbootState.phase = 'idle';
+			firstbootState.candidates = null;
+			firstbootState.selectedBackup = null;
+			firstbootState.prepare = null;
+			firstbootState.prebackup = null;
+			firstbootState.apply = null;
+			firstbootState.complete = null;
+			firstbootState.error = null;
+			firstbootConfirmInput.value = '';
+			renderFirstbootPanel();
+		}
+
+		function failFirstboot(err) {
+			firstbootState.error = err && err.data ? (err.data.message || err.data.code) : ((err && err.message) || String(err));
+			firstbootState.phase = 'failed';
+			renderFirstbootPanel();
+			ui.addNotification(null, E('p', {}, firstbootState.error), 'danger');
+		}
+
+		function renderFirstbootStatus() {
+			var status = firstbootState.status || {};
+			var identity = status.identity || {};
+			var network = status.network || {};
+			var done = status.done_marker || {};
+			var reasons = Array.isArray(status.blocked_reasons) ? status.blocked_reasons : [];
+			var qr = E('div', { 'class': 'wrtbak-firstboot-qr' });
+
+			if (status.qr_svg)
+				qr.innerHTML = status.qr_svg;
+			else
+				qr.appendChild(E('em', {}, _('QR code unavailable')));
+
+			replaceChildren(firstbootStatusPanel, [
+				E('p', {}, [
+					E('strong', {}, _('Device UID')),
+					': ',
+					E('code', {}, identity.uid || '-')
+				]),
+				E('p', {}, [
+					E('strong', {}, _('Device')),
+					': ',
+					identity.hostname || '-',
+					' / ',
+					identity.board || '-',
+					' / ',
+					identity.mac || '-'
+				]),
+				E('p', {}, [
+					E('strong', {}, _('Local URL')),
+					': ',
+					E('a', { 'class': 'wrtbak-firstboot-local-link', href: status.local_url || '#', target: '_blank', rel: 'noreferrer' }, status.local_url || '-')
+				]),
+				E('div', { 'class': 'wrtbak-firstboot-checks' }, [
+					statusTag(network.default_route === true, network.default_route === true ? _('Default route ready') : reasonLabel('no_default_route')),
+					' ',
+					statusTag(network.dns === true, network.dns === true ? _('DNS ready') : reasonLabel('dns_not_ready')),
+					' ',
+					statusTag(network.time === true, network.time === true ? _('Time ready') : reasonLabel('time_not_ready')),
+					' ',
+					statusTag(done.exists !== true || done.status === 'ok', done.exists === true && done.status !== 'ok' ? reasonLabel('done_marker_uid_mismatch') : _('Done marker ok'))
+				]),
+				reasons.length ? E('p', { 'class': 'alert-message warning' }, [
+					E('strong', {}, _('Blocked')),
+					': ',
+					reasons.map(function(reason) { return reasonLabel(reason); }).join(', ')
+				]) : E('p', { 'class': 'alert-message info' }, _('Firstboot checks are clear.')),
+				qr
+			]);
+		}
+
+		function renderFirstbootCandidates() {
+			var result = firstbootState.candidates;
+			var backups = result && result.remote && Array.isArray(result.remote.backups) ? result.remote.backups : [];
+			var table;
+
+			if (!result) {
+				replaceChildren(firstbootCandidatesPanel, E('p', {}, _('Scan the configured remote target to find backups for this device.')));
+				return;
+			}
+
+			table = E('table', { 'class': 'table' }, [
+				E('tr', { 'class': 'tr table-titles' }, [
+					E('th', { 'class': 'th' }, _('File')),
+					E('th', { 'class': 'th' }, _('Format')),
+					E('th', { 'class': 'th' }, _('Modified')),
+					E('th', { 'class': 'th right' }, _('Action'))
+				])
+			]);
+
+			if (!backups.length) {
+				table.appendChild(E('tr', { 'class': 'tr' }, [
+					E('td', { 'class': 'td', colspan: 4 }, E('em', {}, _('No matching firstboot backups')))
+				]));
+			}
+
+			backups.forEach(function(backup) {
+				var path = backup.path || backup.filename || '';
+				var readOnly = backup.legacy === true || !String(path).match(/(^|\/)devices\/[^/]+\/wrtbak\//);
+				var actions = readOnly ? [
+					E('span', { 'class': 'cbi-tag cbi-tag-warning' }, reasonLabel('legacy_backup_read_only'))
+				] : [
+					E('button', {
+						type: 'button',
+						'class': 'btn cbi-button cbi-button-action',
+						click: function() { firstbootPrepareBackup(backup); }
+					}, _('Review restore'))
+				];
+
+				table.appendChild(E('tr', { 'class': 'tr' }, [
+					E('td', { 'class': 'td' }, E('code', {}, path || '-')),
+					E('td', { 'class': 'td' }, backup.format || '-'),
+					E('td', { 'class': 'td' }, backup.modified || '-'),
+					E('td', { 'class': 'td right' }, actions)
+				]));
+			});
+
+			replaceChildren(firstbootCandidatesPanel, [
+				E('p', {}, [
+					E('strong', {}, _('Write policy')),
+					': ',
+					reasonLabel(result.write_policy || 'current_device_only')
+				]),
+				table
+			]);
+		}
+
+		function renderFirstbootPlan() {
+			var plan = firstbootState.prepare && firstbootState.prepare.plan ? firstbootState.prepare.plan : null;
+
+			firstbootPlanPanel.innerHTML = '';
+			firstbootPlanPanel.appendChild(E('h4', {}, _('Firstboot restore plan')));
+			firstbootPlanPanel.appendChild(E('p', {}, [
+				E('strong', {}, _('Status')),
+				': ',
+				firstbootState.phase
+			]));
+
+			if (firstbootState.selectedBackup) {
+				firstbootPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Remote path')),
+					': ',
+					E('code', {}, firstbootState.selectedBackup.path || firstbootState.selectedBackup.filename || '-')
+				]));
+			}
+
+			if (firstbootState.prepare) {
+				firstbootPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Local path')),
+					': ',
+					E('code', {}, (firstbootState.prepare.download && (firstbootState.prepare.download.local_path || firstbootState.prepare.download.path)) || '-')
+				]));
+				appendRestorePlan(firstbootPlanPanel, firstbootState.prepare.prepare);
+				firstbootPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Apply gate')),
+					': ',
+					statusTag(plan && plan.can_apply === true, plan && plan.can_apply === true ? reasonLabel('current_device_only') : reasonLabel(plan && plan.reason))
+				]));
+				firstbootPlanPanel.appendChild(jsonBlock(plan));
+			}
+
+			if (firstbootState.prebackup) {
+				firstbootPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Pre-restore backup')),
+					': ',
+					E('code', {}, firstbootState.prebackup.path || '-')
+				]));
+			}
+
+			if (firstbootState.apply) {
+				appendApplyResult(firstbootPlanPanel, firstbootState.apply.apply);
+				firstbootPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Completion receipt')),
+					': ',
+					E('code', {}, firstbootState.apply.completion_receipt || '-')
+				]));
+			}
+
+			if (firstbootState.complete) {
+				firstbootPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Done marker')),
+					': ',
+					E('code', {}, (firstbootState.complete.done_marker && firstbootState.complete.done_marker.path) || '-')
+				]));
+			}
+
+			if (firstbootState.error)
+				firstbootPlanPanel.appendChild(E('div', { 'class': 'alert-message danger' }, firstbootState.error));
+
+			firstbootPlanPanel.appendChild(field('wrtbak-firstboot-confirmation', _('Confirmation'), firstbootConfirmInput));
+			firstbootPlanPanel.appendChild(E('div', { 'class': 'cbi-page-actions' }, [
+				firstbootPrebackupButton,
+				' ',
+				firstbootApplyButton
+			]));
+			updateFirstbootButtons();
+		}
+
+		function renderFirstbootPanel() {
+			replaceChildren(firstbootPanel, [
+				E('h3', {}, _('Firstboot restore')),
+				firstbootStatusPanel,
+				E('div', { 'class': 'cbi-page-actions' }, [
+					firstbootListButton,
+					' ',
+					E('button', {
+						type: 'button',
+						'class': 'btn cbi-button',
+						click: ui.createHandlerFn(this, function() {
+							return runWrtbak([ 'firstboot-status', '--json' ]).then(function(status) {
+								firstbootState.status = status;
+								renderFirstbootPanel();
+							}).catch(failFirstboot);
+						})
+					}, _('Refresh firstboot status')),
+					' ',
+					E('button', {
+						type: 'button',
+						'class': 'btn cbi-button',
+						click: ui.createHandlerFn(this, resetFirstbootState)
+					}, _('Reset firstboot review'))
+				]),
+				firstbootCandidatesPanel,
+				firstbootPlanPanel
+			]);
+			renderFirstbootStatus();
+			renderFirstbootCandidates();
+			renderFirstbootPlan();
+		}
+
+		function firstbootListCandidates() {
+			firstbootState.phase = 'listing';
+			firstbootState.candidates = null;
+			firstbootState.selectedBackup = null;
+			firstbootState.prepare = null;
+			firstbootState.prebackup = null;
+			firstbootState.apply = null;
+			firstbootState.complete = null;
+			firstbootState.error = null;
+			firstbootConfirmInput.value = '';
+			renderFirstbootPanel();
+
+			return saveConfig().then(function() {
+				return runWrtbak([ 'firstboot-candidates', '--target', selectedTarget(), '--json' ]);
+			}).then(function(result) {
+				firstbootState.candidates = result;
+				firstbootState.phase = 'candidates';
+				renderFirstbootPanel();
+				ui.addNotification(null, E('p', {}, _('Firstboot backups loaded.')), 'info');
+			}).catch(failFirstboot);
+		}
+
+		function firstbootPrepareBackup(backup) {
+			firstbootState.phase = 'preparing';
+			firstbootState.selectedBackup = backup;
+			firstbootState.prepare = null;
+			firstbootState.prebackup = null;
+			firstbootState.apply = null;
+			firstbootState.complete = null;
+			firstbootState.error = null;
+			firstbootConfirmInput.value = '';
+			renderFirstbootPanel();
+
+			return runWrtbak([ 'firstboot-prepare', '--target', selectedTarget(), '--path', backup.path, '--json' ]).then(function(result) {
+				firstbootState.prepare = result;
+				firstbootState.phase = result.plan && result.plan.can_apply === true ? 'prepared' : 'blocked';
+				renderFirstbootPanel();
+				ui.addNotification(null, E('p', {}, _('Firstboot restore plan prepared.')), 'info');
+			}).catch(failFirstboot);
+		}
+
+		function firstbootCreatePrebackup() {
+			if (firstbootState.phase !== 'prepared' || !firstbootState.selectedBackup)
+				return Promise.resolve();
+
+			return runWrtbak([ 'restore-prebackup', '--profile', 'pre-restore', '--items', 'all', '--format', 'wrtbak', '--require-remote', '0', '--source-backup-key', firstbootState.selectedBackup.path, '--json' ]).then(function(result) {
+				firstbootState.prebackup = result;
+				firstbootState.phase = 'prebackup_ready';
+				renderFirstbootPanel();
+				ui.addNotification(null, E('p', {}, _('Firstboot pre-restore backup created.')), 'info');
+			}).catch(failFirstboot);
+		}
+
+		function firstbootApplyRestore() {
+			if (firstbootState.phase !== 'prebackup_ready' || !firstbootConfirmed())
+				return Promise.resolve();
+
+			firstbootState.phase = 'applying';
+			renderFirstbootPanel();
+
+			return runWrtbak([ 'firstboot-apply', '--input', firstbootInputPath(), '--prebackup', firstbootState.prebackup.path, '--confirm', 'RESTORE', '--json' ]).then(function(result) {
+				firstbootState.apply = result;
+				return runWrtbak([ 'firstboot-complete', '--json' ]);
+			}).then(function(result) {
+				firstbootState.complete = result;
+				firstbootState.phase = 'complete';
+				renderFirstbootPanel();
+				ui.addNotification(null, E('p', {}, _('Firstboot restore completed.')), 'info');
+			}).catch(failFirstboot);
+		}
+
+		function proxyReasonLabel(reason) {
+			switch (reason) {
+			case 'health_check_failed':
+				return 'health_check_failed';
+			case 'service_stopped':
+				return 'service_stopped';
+			case 'no_candidates':
+				return 'no_candidates';
+			case 'disabled':
+				return 'disabled';
+			case 'checksum_mismatch':
+				return 'checksum_mismatch';
+			default:
+				return reason || '-';
+			}
+		}
+
+		function resetProxyState() {
+			proxyState.phase = 'idle';
+			proxyState.candidates = null;
+			proxyState.selected = null;
+			proxyState.prepare = null;
+			proxyState.apply = null;
+			proxyState.error = null;
+			renderProxyPanel();
+		}
+
+		function failProxy(err) {
+			var data = err && err.data ? err.data : null;
+			proxyState.apply = data && data.operation === 'proxy-apply' ? data : proxyState.apply;
+			proxyState.error = data ? proxyReasonLabel(data.code || data.message) : ((err && err.message) || String(err));
+			proxyState.phase = 'failed';
+			renderProxyPanel();
+			ui.addNotification(null, E('p', {}, proxyState.error), 'danger');
+		}
+
+		function selectProxyCandidate(candidate) {
+			proxyState.selected = candidate;
+			proxyState.prepare = null;
+			proxyState.apply = null;
+			proxyState.error = null;
+			proxyState.phase = 'selected';
+			renderProxyPanel();
+		}
+
+		function scanProxyCandidates(proxy) {
+			proxyState.phase = 'listing';
+			proxyState.proxy = proxy;
+			proxyState.candidates = null;
+			proxyState.selected = null;
+			proxyState.prepare = null;
+			proxyState.apply = null;
+			proxyState.error = null;
+			renderProxyPanel();
+
+			return saveConfig().then(function() {
+				return runWrtbak([ 'proxy-candidates', '--target', selectedTarget(), '--proxy', proxy, '--json' ]);
+			}).then(function(result) {
+				proxyState.candidates = result;
+				proxyState.selected = result.selected || null;
+				proxyState.phase = proxyState.selected ? 'selected' : 'candidates';
+				renderProxyPanel();
+				ui.addNotification(null, E('p', {}, _('Proxy artifacts loaded.')), 'info');
+			}).catch(failProxy);
+		}
+
+		function applyProxyArtifact() {
+			var selected = proxyState.selected;
+
+			if (!selected || !selected.manifest_path)
+				return Promise.resolve();
+
+			proxyState.phase = 'preparing';
+			proxyState.prepare = null;
+			proxyState.apply = null;
+			proxyState.error = null;
+			renderProxyPanel();
+
+			return runWrtbak([ 'proxy-prepare', '--target', selectedTarget(), '--proxy', proxyState.proxy, '--path', selected.manifest_path, '--json' ]).then(function(prepared) {
+				proxyState.prepare = prepared;
+				proxyState.phase = 'applying';
+				renderProxyPanel();
+				return runWrtbak([ 'proxy-apply', '--proxy', proxyState.proxy, '--input', prepared.artifact.local_path, '--manifest', prepared.manifest.local_path, '--confirm', 'APPLY', '--json' ]);
+			}).then(function(result) {
+				proxyState.apply = result;
+				proxyState.phase = 'applied';
+				renderProxyPanel();
+				ui.addNotification(null, E('p', {}, _('Proxy artifact applied.')), 'info');
+			}).catch(failProxy);
+		}
+
+		function renderProxyCandidates() {
+			var result = proxyState.candidates;
+			var candidates = result && Array.isArray(result.candidates) ? result.candidates : [];
+			var selected = proxyState.selected;
+			var table;
+
+			if (!result) {
+				replaceChildren(proxyCandidatesPanel, E('p', {}, _('Scan cloud proxy artifacts to compare device, site, and shared profiles.')));
+				return;
+			}
+
+			table = E('table', { 'class': 'table' }, [
+				E('tr', { 'class': 'tr table-titles' }, [
+					E('th', { 'class': 'th' }, _('Scope')),
+					E('th', { 'class': 'th' }, _('Manifest')),
+					E('th', { 'class': 'th' }, _('SHA256')),
+					E('th', { 'class': 'th right' }, _('Action'))
+				])
+			]);
+
+			if (!candidates.length) {
+				table.appendChild(E('tr', { 'class': 'tr' }, [
+					E('td', { 'class': 'td', colspan: 4 }, E('em', {}, _('No proxy artifacts')))
+				]));
+			}
+
+			candidates.forEach(function(candidate) {
+				var isSelected = selected && selected.manifest_path === candidate.manifest_path;
+				table.appendChild(E('tr', { 'class': 'tr' }, [
+					E('td', { 'class': 'td' }, [
+						E('span', { 'class': isSelected ? 'cbi-tag cbi-tag-success' : 'cbi-tag' }, candidate.scope || '-')
+					]),
+					E('td', { 'class': 'td' }, E('code', {}, candidate.manifest_path || '-')),
+					E('td', { 'class': 'td' }, E('code', {}, candidate.sha256 || '-')),
+					E('td', { 'class': 'td right' }, E('button', {
+						type: 'button',
+						'class': 'btn cbi-button',
+						click: function() { selectProxyCandidate(candidate); }
+					}, isSelected ? _('Selected') : _('Select')))
+				]));
+			});
+
+			replaceChildren(proxyCandidatesPanel, [
+				E('p', {}, [
+					E('strong', {}, _('Priority')),
+					': ',
+					result.selected ? result.selected.scope : '-'
+				]),
+				table
+			]);
+		}
+
+		function renderProxyPlan() {
+			var selected = proxyState.selected;
+			var apply = proxyState.apply || {};
+			var rollback = apply.rollback || {};
+
+			proxyPlanPanel.innerHTML = '';
+			proxyPlanPanel.appendChild(E('h4', {}, _('Proxy update review')));
+			proxyPlanPanel.appendChild(E('p', {}, [
+				E('strong', {}, _('Status')),
+				': ',
+				proxyState.phase
+			]));
+
+			if (selected) {
+				proxyPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Selected')),
+					': ',
+					selected.scope,
+					' / ',
+					E('code', {}, selected.manifest_path || '-')
+				]));
+				proxyPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Update')),
+					': ',
+					statusTag(selected.update_available !== false, selected.update_available === false ? _('Already current') : _('Available'))
+				]));
+			}
+
+			if (proxyState.prepare)
+				proxyPlanPanel.appendChild(jsonBlock(proxyState.prepare));
+
+			if (proxyState.apply) {
+				proxyPlanPanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Health')),
+					': ',
+					statusTag(apply.health && apply.health.ok === true, apply.health && apply.health.ok === true ? _('OK') : proxyReasonLabel(apply.code || (apply.health && apply.health.reason)))
+				]));
+				if (rollback.action)
+					proxyPlanPanel.appendChild(E('p', {}, [
+						E('strong', {}, _('Rollback')),
+						': ',
+						proxyReasonLabel(rollback.action)
+					]));
+				proxyPlanPanel.appendChild(jsonBlock(proxyState.apply));
+			}
+
+			if (proxyState.error)
+				proxyPlanPanel.appendChild(E('div', { 'class': 'alert-message danger' }, proxyState.error));
+
+			proxyPlanPanel.appendChild(E('div', { 'class': 'cbi-page-actions' }, [
+				proxyApplyButton,
+				' ',
+				proxyResetButton
+			]));
+
+			if (proxyApplyButton)
+				proxyApplyButton.disabled = !selected || proxyState.phase === 'preparing' || proxyState.phase === 'applying';
+		}
+
+		function renderProxyPanel() {
+			replaceChildren(proxyPanel, [
+				E('h3', {}, _('Cloud proxy artifacts')),
+				E('p', {}, [
+					statusTag(proxyArtifacts.enabled === true, proxyArtifacts.enabled === true ? _('Enabled') : _('Disabled')),
+					' ',
+					E('strong', {}, _('Mode')),
+					': ',
+					proxyArtifacts.mode || '-',
+					' ',
+					E('strong', {}, _('Site')),
+					': ',
+					proxyArtifacts.site || '-'
+				]),
+				E('div', { 'class': 'cbi-page-actions' }, [
+					proxyNikkiButton,
+					' ',
+					proxyDaeButton
+				]),
+				proxyCandidatesPanel,
+				proxyPlanPanel
+			]);
+			renderProxyCandidates();
+			renderProxyPlan();
+		}
+
+		function renderRestorePanel() {
+			restorePanel.innerHTML = '';
+			restorePanel.appendChild(E('h3', {}, _('Restore review')));
+
+			if (restoreState.phase === 'idle') {
+				restorePanel.appendChild(E('p', {}, _('No restore selected.')));
+				updateRestoreButtons();
+				return;
+			}
+
+			restorePanel.appendChild(E('p', {}, [
+				E('strong', {}, _('Status')),
+				': ',
+				restoreState.phase
+			]));
+
+			if (restoreState.backup) {
+				restorePanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Remote path')),
+					': ',
+					E('code', {}, restoreState.backup.path || restoreState.backup.filename || '-')
+				]));
+			}
+
+			if (restoreState.download) {
+				restorePanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Local path')),
+					': ',
+					E('code', {}, restoreState.download.local_path || '-')
+				]));
+			}
+
+			if (restoreState.prepare)
+				appendRestorePlan(restorePanel, restoreState.prepare);
+
+			if (restoreState.prebackup) {
+				restorePanel.appendChild(E('p', {}, [
+					E('strong', {}, _('Pre-restore backup')),
+					': ',
+					E('code', {}, restoreState.prebackup.path || '-')
+				]));
+			}
+
+			if (restoreState.apply)
+				appendApplyResult(restorePanel, restoreState.apply);
+
+			if (restoreState.error)
+				restorePanel.appendChild(E('div', { 'class': 'alert-message danger' }, restoreState.error));
+
+			if (restoreState.unknown)
+				restorePanel.appendChild(E('div', { 'class': 'alert-message warning wrtbak-restore-unknown' }, _('Restore handoff status is unknown. Reconnect and inspect router state.')));
+
+			restorePanel.appendChild(field('wrtbak-restore-confirmation', _('Confirmation'), confirmationInput));
+			restorePanel.appendChild(E('div', { 'class': 'cbi-page-actions' }, [
+				prebackupButton,
+				' ',
+				applyButton,
+				' ',
+				applyAllButton,
+				' ',
+				sysupgradePreflightButton,
+				' ',
+				sysupgradeExecuteButton
+			]));
+			updateRestoreButtons();
+		}
+
 		function backupArgs(root) {
 			var ids = selectedItems(root);
 			var name = profile.value.trim();
@@ -407,7 +1274,103 @@ return view.extend({
 			};
 		}
 
+		function failRestore(err, unknown) {
+			restoreState.apply = err && err.data ? err.data : restoreState.apply;
+			restoreState.error = err && err.data ? (err.data.message || err.data.code) : ((err && err.message) || String(err));
+			restoreState.unknown = unknown === true;
+			setRestorePhase('failed');
+			ui.addNotification(null, E('p', {}, restoreState.error), 'danger');
+		}
+
+		function restoreBackup(backup) {
+			restoreState.phase = 'downloading';
+			restoreState.target = selectedTarget();
+			restoreState.backup = backup;
+			restoreState.download = null;
+			restoreState.prepare = null;
+			restoreState.prebackup = null;
+			restoreState.apply = null;
+			restoreState.sysupgradePreflight = null;
+			restoreState.error = null;
+			restoreState.unknown = false;
+			confirmationInput.value = '';
+			renderRestorePanel();
+
+			return runWrtbak([ 'remote-download', '--target', selectedTarget(), '--path', backup.path, '--json' ]).then(function(download) {
+				restoreState.download = download;
+				return runWrtbak([ 'restore-prepare', '--input', download.local_path, '--json' ]);
+			}).then(function(prepare) {
+				restoreState.prepare = prepare;
+				setRestorePhase('prepared');
+				ui.addNotification(null, E('p', {}, _('Restore archive prepared.')), 'info');
+			}).catch(function(err) {
+				failRestore(err);
+			});
+		}
+
+		function createPrebackup() {
+			if (restoreState.phase !== 'prepared')
+				return Promise.resolve();
+
+			return runWrtbak([ 'restore-prebackup', '--profile', 'pre-restore', '--items', 'all', '--format', 'wrtbak', '--json' ]).then(function(prebackup) {
+				restoreState.prebackup = prebackup;
+				setRestorePhase('prebackup_ready');
+				ui.addNotification(null, E('p', {}, _('Pre-restore backup created.')), 'info');
+			}).catch(function(err) {
+				failRestore(err);
+			});
+		}
+
+		function applyWrtbak(mode, itemsValue) {
+			if (!canRunConfirmedRestore())
+				return Promise.resolve();
+
+			setRestorePhase('applying');
+			return runWrtbak([ 'restore-apply', '--input', restoreInputPath(), '--mode', mode, '--items', itemsValue, '--prebackup', restoreState.prebackup.path, '--confirm', 'RESTORE', '--restart-services', '0', '--json' ]).then(function(result) {
+				restoreState.apply = result;
+				setRestorePhase('applied');
+				ui.addNotification(null, E('p', {}, _('Restore completed.')), 'info');
+			}).catch(function(err) {
+				failRestore(err);
+			});
+		}
+
+		function preflightSysupgrade() {
+			if (!canRunConfirmedRestore())
+				return Promise.resolve();
+
+			return runWrtbak([ 'restore-sysupgrade', '--input', restoreInputPath(), '--prebackup', restoreState.prebackup.path, '--confirm', 'RESTORE', '--execute', '0', '--json' ]).then(function(result) {
+				restoreState.sysupgradePreflight = result;
+				restoreState.apply = result;
+				setRestorePhase('prebackup_ready');
+				ui.addNotification(null, E('p', {}, _('Sysupgrade preflight completed.')), 'info');
+			}).catch(function(err) {
+				failRestore(err);
+			});
+		}
+
+		function executeSysupgrade() {
+			if (!canRunConfirmedRestore() || !restoreState.sysupgradePreflight)
+				return Promise.resolve();
+
+			setRestorePhase('applying');
+			return runWrtbak([ 'restore-sysupgrade', '--input', restoreInputPath(), '--prebackup', restoreState.prebackup.path, '--confirm', 'RESTORE', '--execute', '1', '--json' ]).then(function(result) {
+				restoreState.apply = result;
+				setRestorePhase('applied');
+				ui.addNotification(null, E('p', {}, _('Sysupgrade restore handed off.')), 'info');
+			}).catch(function(err) {
+				if (!err.data) {
+					failRestore(err, true);
+					return;
+				}
+				if (err.data.code === 'sysupgrade_failed')
+					restoreState.apply = err.data;
+				failRestore(err);
+			});
+		}
+
 		function listRemoteBackups() {
+			resetRestoreState();
 			return runWrtbak([ 'remote-list', '--target', selectedTarget(), '--json' ]).then(function(result) {
 				remotePanel.style.display = '';
 				remotePanel.textContent = String.format('%s: %s', _('Remote target'), remoteTargetDriver(result.target));
@@ -418,7 +1381,7 @@ return view.extend({
 					}).catch(function(err) {
 						ui.addNotification(null, E('p', {}, err.message || String(err)), 'danger');
 					});
-				});
+				}, restoreBackup);
 			});
 		}
 
@@ -531,8 +1494,95 @@ return view.extend({
 			})
 		}, _('Apply schedule'));
 
+		confirmationInput.addEventListener('input', updateRestoreButtons);
+
+		prebackupButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-action',
+			click: ui.createHandlerFn(this, createPrebackup)
+		}, _('Create pre-restore backup'));
+
+		applyButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-positive',
+			click: ui.createHandlerFn(this, function() {
+				return applyWrtbak('selected', 'core-system');
+			})
+		}, _('Apply core system'));
+
+		applyAllButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-negative',
+			click: ui.createHandlerFn(this, function() {
+				return applyWrtbak('all', 'all');
+			})
+		}, _('Apply all'));
+
+		sysupgradePreflightButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button',
+			click: ui.createHandlerFn(this, preflightSysupgrade)
+		}, _('Sysupgrade preflight'));
+
+		sysupgradeExecuteButton = E('button', {
+			id: 'wrtbak-sysupgrade-execute',
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-negative wrtbak-sysupgrade-execute',
+			click: ui.createHandlerFn(this, executeSysupgrade)
+		}, _('Execute sysupgrade restore'));
+
+		firstbootConfirmInput.addEventListener('input', updateFirstbootButtons);
+
+		firstbootListButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-action',
+			click: ui.createHandlerFn(this, firstbootListCandidates)
+		}, _('Scan firstboot backups'));
+
+		firstbootPrebackupButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-action',
+			click: ui.createHandlerFn(this, firstbootCreatePrebackup)
+		}, _('Create firstboot pre-restore backup'));
+
+		firstbootApplyButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-negative',
+			click: ui.createHandlerFn(this, firstbootApplyRestore)
+		}, _('Apply firstboot restore'));
+
+		proxyNikkiButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-action',
+			click: ui.createHandlerFn(this, function() {
+				return scanProxyCandidates('nikki');
+			})
+		}, _('Scan Nikki artifact'));
+
+		proxyDaeButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button',
+			click: ui.createHandlerFn(this, function() {
+				return scanProxyCandidates('dae');
+			})
+		}, _('Scan DAE artifact'));
+
+		proxyApplyButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button cbi-button-positive',
+			click: ui.createHandlerFn(this, applyProxyArtifact)
+		}, _('Apply proxy artifact'));
+
+		proxyResetButton = E('button', {
+			type: 'button',
+			'class': 'btn cbi-button',
+			click: ui.createHandlerFn(this, resetProxyState)
+		}, _('Reset proxy review'));
+
 		var page = E('div', { 'class': 'wrtbak-page' }, [
 			E('h2', {}, _('Wrtbak')),
+			firstbootPanel,
+			proxyPanel,
 			E('div', { 'class': 'cbi-section' }, [
 				field('wrtbak-profile', _('Profile'), profile),
 				field('wrtbak-format', _('Archive'), format),
@@ -580,12 +1630,16 @@ return view.extend({
 			E('div', { 'class': 'cbi-section wrtbak-remote-backups' }, [
 				E('h3', {}, _('Remote backups')),
 				remotePanel,
-				remoteTable
+				remoteTable,
+				restorePanel
 			])
 		]);
 
 		updatePagination(rows, pagination, pageSize, pageSummary, previousButton, nextButton);
-		renderBackupRows(remoteTable, [], function() {});
+		renderBackupRows(remoteTable, [], function() {}, function() {});
+		renderFirstbootPanel();
+		renderProxyPanel();
+		renderRestorePanel();
 
 		return page;
 	}

@@ -88,23 +88,105 @@ The restore plan reports the manifest identity, file counts, total bytes, restar
 
 This command is read-only. It extracts into a temporary directory, validates tar member safety, reads `manifest.json`, and deletes temporary files when it exits.
 
-## Restore Boundary
+## Confirmed Restore Flow
 
-`luci-app-wrtbak` does not yet implement an automatic restore writer. A maintenance agent must ask the operator before restoring.
+Remote restore is intentionally gated. A maintenance agent must not apply a restore until the operator has approved the target archive, reviewed the plan, created a fresh pre-restore backup, and confirmed the exact token `RESTORE`.
 
-When a human approves a native OpenWrt restore, convert or use a reviewed `.sysupgrade.tar.gz` archive and run OpenWrt's native restore command from the router:
+Download a remote archive into the restore cache:
 
 ```sh
-sysupgrade -r /tmp/wrtbak/test-ax1800-20260625T000000Z.sysupgrade.tar.gz
+ssh root@192.168.11.234 \
+  'wrtbak remote-download --target webdav --path REMOTE_PATH --json'
 ```
 
+Review the local archive:
+
+```sh
+ssh root@192.168.11.234 \
+  'wrtbak restore-prepare --input /tmp/wrtbak/restore-cache/CACHED.wrtbak --json'
+```
+
+Create the mandatory local rollback point:
+
+```sh
+ssh root@192.168.11.234 \
+  'wrtbak restore-prebackup --profile pre-restore --items all --format wrtbak --json'
+```
+
+Apply a `.wrtbak` archive only after approval:
+
+```sh
+ssh root@192.168.11.234 \
+  'wrtbak restore-apply --input /tmp/wrtbak/restore-cache/CACHED.wrtbak --mode selected --items core-system --prebackup /tmp/wrtbak/pre-restore-YYYYMMDDTHHMMSSZ.wrtbak --confirm RESTORE --restart-services 0 --json'
+```
+
+For native sysupgrade archives, run a preflight first:
+
+```sh
+ssh root@192.168.11.234 \
+  'wrtbak restore-sysupgrade --input /tmp/wrtbak/restore-cache/CACHED.sysupgrade.tar.gz --prebackup /tmp/wrtbak/pre-restore-YYYYMMDDTHHMMSSZ.wrtbak --confirm RESTORE --execute 0 --json'
+```
+
+Only after the preflight is accepted, execute native restore:
+
+```sh
+ssh root@192.168.11.234 \
+  'wrtbak restore-sysupgrade --input /tmp/wrtbak/restore-cache/CACHED.sysupgrade.tar.gz --prebackup /tmp/wrtbak/pre-restore-YYYYMMDDTHHMMSSZ.wrtbak --confirm RESTORE --execute 1 --json'
+```
+
+`restore-sysupgrade --execute 1` invokes `sysupgrade -r` and can interrupt the management connection before JSON returns. Treat a dropped SSH/LuCI session as an unknown handoff state until the router is reachable again.
+
 After restoring network, wireless, Dropbear, Tailscale, WireGuard, DNS, or proxy configuration, prefer a full reboot unless the operator explicitly asks for a service-only restart. Network-related restores can interrupt SSH, LuCI, and tailnet connectivity.
+
+## Firstboot Auto Restore
+
+Automatic firstboot restore is disabled by default and should only be enabled
+in owner-approved private firmware builds or by explicit UCI configuration:
+
+```sh
+uci set wrtbak.main.firstboot_auto_enabled='1'
+uci set wrtbak.main.firstboot_auto_target='s3'
+uci commit wrtbak
+/etc/init.d/wrtbak-firstboot-auto enable
+```
+
+The safe one-shot command is:
+
+```sh
+wrtbak firstboot-auto --target s3 --json
+```
+
+It will skip without writing configuration when auto restore is disabled, the
+current device already has a matching done marker, network readiness is
+incomplete, or no canonical current-device backup exists. When it applies a
+restore, it creates a pre-restore `.wrtbak`, restores the selected current
+device backup, writes `/root/wrtbak/firstboot/done.json`, and reports
+`"reboot_recommended": true`.
+
+The init script logs attempts to:
+
+```text
+/root/wrtbak/firstboot/auto.log
+```
+
+Maintenance agents should inspect this log and `wrtbak firstboot-complete
+--json` after a factory-reset validation before assuming the router recovered
+itself.
+
+The init service also writes an atomic mode-0600 coordination receipt at
+`/root/wrtbak/firstboot/gate.json`. Headscale enrollment and other consumers
+must wait while its state is `pending` or `reboot_pending`. States
+`already_done`, `restored`, `no_backup`, `failed_final`, and `disabled` are
+terminal decisions. The receipt contains status metadata only and never stores
+remote credentials or backup contents.
 
 ## Agent Rules
 
 - Run `doctor --json` before creating archives.
 - Run `plan --json` before `create` or `create-download`.
-- Run `restore-plan --json` before any restore discussion.
+- Run `restore-prepare --json` before any restore apply.
+- Always create `restore-prebackup --json` immediately before `restore-apply` or `restore-sysupgrade`.
 - Treat `sensitive_item` warnings as expected for network, Dropbear, proxy, VPN, Tailscale, and DDNS backups.
 - Do not copy real `.wrtbak` or `.sysupgrade.tar.gz` files into a public repository.
-- Do not run `sysupgrade -r` without explicit human confirmation.
+- Do not run `restore-apply`, `restore-sysupgrade --execute 1`, or raw `sysupgrade -r` without explicit human confirmation.
+- Ask before restoring high-risk network, firewall, SSH, Tailscale, WireGuard, Nikki, MosDNS, DDNS, or proxy configuration.

@@ -77,7 +77,7 @@ wrtbak_create_download() {
 			;;
 	esac
 
-	wrtbak_dir=$(wrtbak_output_dir)
+	wrtbak_dir="$(wrtbak_output_dir)/downloads"
 	wrtbak_prepare_output_dir "$wrtbak_dir"
 	wrtbak_cleanup_downloads "$wrtbak_dir"
 

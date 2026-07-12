@@ -66,10 +66,12 @@ wrtbak_known_item_rows() {
 	cat <<'EOF'
 core-system|OpenWrt system|core||/etc/config/system|system|false|true|Hostname, timezone, and base system settings
 network|Network, PPPoE, DHCP, DNS, firewall|core||/etc/config/network /etc/config/dhcp /etc/config/firewall|network firewall dnsmasq odhcpd|true|true|LAN/WAN, PPPoE credentials, DHCP, DNS, and firewall rules
+firewall-extra|Firewall extra rules|core||/etc/firewall.user /etc/nftables.d /etc/hotplug.d/firewall|firewall|true|true|Custom firewall scripts, nftables snippets, and firewall hotplug rules
 wireless|Wi-Fi|core||/etc/config/wireless|network|true|true|Wireless radio and SSID settings
 dropbear|Dropbear SSH|access|dropbear|/etc/config/dropbear /etc/dropbear/authorized_keys /etc/dropbear/dropbear_rsa_host_key /etc/dropbear/dropbear_ecdsa_host_key /etc/dropbear/dropbear_ed25519_host_key|dropbear|true|true|SSH access policy, authorized keys, and host identity
 ddns-go|DDNS-Go|plugin|luci-app-ddns-go,ddns-go|/etc/config/ddns-go /etc/ddns-go /etc/ddns-go.yaml|ddns-go|true|true|DDNS-Go configuration and tokens
 nikki|Nikki proxy|plugin|luci-app-nikki,nikki|/etc/config/nikki /etc/nikki|nikki|true|true|Nikki proxy profiles, rules, and runtime configuration
+dae|DAE/Daed proxy|plugin|luci-app-dae,luci-app-daed,dae,daed|/etc/config/dae /etc/config/daed /etc/dae /etc/daed|dae daed luci_daed|true|true|DAE and Daed transparent proxy configuration and generated final profiles
 mosdns|MosDNS|plugin|luci-app-mosdns,mosdns|/etc/config/mosdns /etc/mosdns|mosdns|false|true|MosDNS resolver configuration and rule files
 tailscale|Tailscale|plugin|luci-app-tailscale-community,luci-app-tailscale,tailscale|/etc/config/tailscale /etc/tailscale /etc/tailscale/tailscaled.state|tailscale|true|true|Tailscale settings and node state
 wireguard|WireGuard|vpn|luci-app-wireguard,wireguard-tools,kmod-wireguard|/etc/config/network /etc/config/firewall /etc/wireguard|network firewall|true|true|WireGuard interfaces, peers, keys, and related firewall settings
@@ -81,7 +83,7 @@ wrtbak_installed_luci_apps() {
 }
 
 wrtbak_known_package_ids() {
-	wrtbak_known_item_rows | while IFS='|' read -r wrtbak_id wrtbak_label wrtbak_category wrtbak_packages wrtbak_paths wrtbak_services wrtbak_sensitive wrtbak_selected wrtbak_description; do
+	wrtbak_known_item_rows | while IFS='|' read -r wrtbak_id wrtbak_label wrtbak_category wrtbak_packages wrtbak_paths wrtbak_item_row_services wrtbak_sensitive wrtbak_selected wrtbak_description; do
 		[ -n "$wrtbak_packages" ] || continue
 		wrtbak_old_ifs=$IFS
 		IFS=,
@@ -185,13 +187,13 @@ wrtbak_detect_items_json() {
 	printf '  "items": [\n'
 
 	wrtbak_detect_first=1
-	while IFS='|' read -r wrtbak_id wrtbak_label wrtbak_category wrtbak_packages wrtbak_paths wrtbak_services wrtbak_sensitive wrtbak_selected wrtbak_description; do
+	while IFS='|' read -r wrtbak_id wrtbak_label wrtbak_category wrtbak_packages wrtbak_paths wrtbak_item_row_services wrtbak_sensitive wrtbak_selected wrtbak_description; do
 		wrtbak_installed=false
 		if [ -z "$wrtbak_packages" ] || wrtbak_any_package_installed "$wrtbak_packages" || wrtbak_any_path_exists "$wrtbak_paths"; then
 			wrtbak_installed=true
 		fi
 
-		wrtbak_detect_emit_item "$wrtbak_id" "$wrtbak_label" "$wrtbak_category" "$wrtbak_installed" true "$wrtbak_sensitive" "$wrtbak_selected" "$wrtbak_paths" "$wrtbak_services" "$wrtbak_description"
+		wrtbak_detect_emit_item "$wrtbak_id" "$wrtbak_label" "$wrtbak_category" "$wrtbak_installed" true "$wrtbak_sensitive" "$wrtbak_selected" "$wrtbak_paths" "$wrtbak_item_row_services" "$wrtbak_description"
 	done < "$wrtbak_known_rows"
 
 	while IFS= read -r wrtbak_pkg || [ -n "$wrtbak_pkg" ]; do
@@ -213,7 +215,7 @@ wrtbak_item_paths_by_id() {
 	wrtbak_lookup_id=$1
 	wrtbak_known_rows=$(mktemp "${TMPDIR:-/tmp}/wrtbak-known.XXXXXX") || wrtbak_die "cannot create temporary file"
 	wrtbak_known_item_rows > "$wrtbak_known_rows"
-	while IFS='|' read -r wrtbak_id wrtbak_label wrtbak_category wrtbak_packages wrtbak_paths wrtbak_services wrtbak_sensitive wrtbak_selected wrtbak_description; do
+	while IFS='|' read -r wrtbak_id wrtbak_label wrtbak_category wrtbak_packages wrtbak_paths wrtbak_item_row_services wrtbak_sensitive wrtbak_selected wrtbak_description; do
 		if [ "$wrtbak_id" = "$wrtbak_lookup_id" ]; then
 			for wrtbak_path in $wrtbak_paths; do
 				printf '%s\n' "$wrtbak_path"

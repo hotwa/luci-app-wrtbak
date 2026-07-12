@@ -70,6 +70,82 @@ wrtbak_join_remote_path() {
 	printf '%s\n' "$wrtbak_joined"
 }
 
+wrtbak_remote_devices_root() {
+	wrtbak_join_remote_path "$1" devices
+}
+
+wrtbak_remote_device_prefix() {
+	wrtbak_base=$1
+	wrtbak_uid=$(wrtbak_identity_current_uid) || return 1
+	wrtbak_join_remote_path "$wrtbak_base" devices "$wrtbak_uid"
+}
+
+wrtbak_remote_pre_restore_prefix() {
+	wrtbak_base=$1
+	wrtbak_uid=$(wrtbak_identity_current_uid) || return 1
+	wrtbak_year=$(date -u +%Y)
+	wrtbak_join_remote_path "$wrtbak_base" devices "$wrtbak_uid" pre-restore "$wrtbak_year"
+}
+
+wrtbak_remote_alias_index_path() {
+	wrtbak_base=$1
+	wrtbak_alias=$2
+	wrtbak_join_remote_path "$wrtbak_base" aliases "$wrtbak_alias.json"
+}
+
+wrtbak_remote_alias_path_name() {
+	wrtbak_identity_load_current || return 1
+	wrtbak_remote_legacy_path_name "$wrtbak_identity_alias_value"
+}
+
+wrtbak_remote_legacy_path_name() {
+	wrtbak_legacy_name=$(wrtbak_remote_normalize_name "$1") || return 1
+	case "$wrtbak_legacy_name" in
+		""|devices|aliases|wrtbak)
+			return 1
+			;;
+	esac
+	printf '%s\n' "$wrtbak_legacy_name"
+}
+
+wrtbak_remote_legacy_device_id_path_name() {
+	wrtbak_remote_legacy_path_name "$(wrtbak_effective_device_id)"
+}
+
+wrtbak_remote_legacy_path_names() {
+	wrtbak_seen_names=
+	wrtbak_alias_name=$(wrtbak_remote_alias_path_name 2>/dev/null || printf '')
+	if [ -n "$wrtbak_alias_name" ]; then
+		printf '%s\n' "$wrtbak_alias_name"
+		wrtbak_seen_names=" $wrtbak_alias_name "
+	fi
+
+	wrtbak_device_id_name=$(wrtbak_remote_legacy_device_id_path_name 2>/dev/null || printf '')
+	if [ -n "$wrtbak_device_id_name" ]; then
+		case "$wrtbak_seen_names" in
+			*" $wrtbak_device_id_name "*)
+				;;
+			*)
+				printf '%s\n' "$wrtbak_device_id_name"
+				;;
+		esac
+	fi
+}
+
+wrtbak_remote_legacy_alias_prefix() {
+	wrtbak_base=$1
+	wrtbak_alias=$(wrtbak_remote_alias_path_name) || return 1
+	wrtbak_join_remote_path "$wrtbak_base" wrtbak "$wrtbak_alias"
+}
+
+wrtbak_remote_legacy_path_prefixes() {
+	wrtbak_base=$1
+	wrtbak_remote_legacy_path_names | while IFS= read -r wrtbak_legacy_name || [ -n "$wrtbak_legacy_name" ]; do
+		[ -n "$wrtbak_legacy_name" ] || continue
+		wrtbak_join_remote_path "$wrtbak_base" wrtbak "$wrtbak_legacy_name" || return 1
+	done
+}
+
 wrtbak_hash8() {
 	printf '%s' "$1" | sha256sum | awk '{ print substr($1, 1, 8) }'
 }
@@ -240,6 +316,16 @@ wrtbak_remote_error_json() {
 	printf '}\n'
 }
 
+wrtbak_remote_require_identity() {
+	wrtbak_operation=$1
+	wrtbak_target=$2
+	if ! wrtbak_identity_load_current; then
+		wrtbak_remote_error_json "$wrtbak_operation" "$wrtbak_target" identity_unusable "device identity is unusable" ""
+		return 1
+	fi
+	return 0
+}
+
 wrtbak_remote_resolve_target() {
 	wrtbak_target=$1
 	if [ "$wrtbak_target" = "default" ]; then
@@ -313,6 +399,7 @@ wrtbak_remote_test() {
 		wrtbak_remote_error_json remote-test "$1" invalid_config "unknown remote target" ""
 		return 1
 	}
+	wrtbak_remote_require_identity remote-test "$wrtbak_target" || return 1
 
 	case "$wrtbak_target" in
 		webdav)
@@ -321,8 +408,7 @@ wrtbak_remote_test() {
 				return 1
 			fi
 			wrtbak_remote_require_dependency curl remote-test "$wrtbak_target" || return 1
-			wrtbak_device_id=$(wrtbak_effective_device_id)
-			wrtbak_remote_path=$(wrtbak_webdav_probe "$wrtbak_remote_webdav_url" "$wrtbak_remote_webdav_username" "$wrtbak_remote_webdav_password" "$wrtbak_remote_webdav_path" "$wrtbak_device_id") || {
+			wrtbak_remote_path=$(wrtbak_webdav_probe "$wrtbak_remote_webdav_url" "$wrtbak_remote_webdav_username" "$wrtbak_remote_webdav_password" "$wrtbak_remote_webdav_path" "$wrtbak_identity_uid") || {
 				wrtbak_remote_error_json remote-test "$wrtbak_target" command_failed "WebDAV probe failed" ""
 				return 1
 			}
@@ -340,8 +426,7 @@ wrtbak_remote_test() {
 				return 1
 			fi
 			wrtbak_remote_require_dependency rclone remote-test "$wrtbak_target" || return 1
-			wrtbak_device_id=$(wrtbak_effective_device_id)
-			wrtbak_remote_path=$(wrtbak_s3_probe "$wrtbak_remote_s3_endpoint" "$wrtbak_remote_s3_region" "$wrtbak_remote_s3_bucket" "$wrtbak_remote_s3_access_key" "$wrtbak_remote_s3_secret_key" "$wrtbak_remote_s3_path" "$wrtbak_remote_s3_force_path_style" "$wrtbak_device_id") || {
+			wrtbak_remote_path=$(wrtbak_s3_probe "$wrtbak_remote_s3_endpoint" "$wrtbak_remote_s3_region" "$wrtbak_remote_s3_bucket" "$wrtbak_remote_s3_access_key" "$wrtbak_remote_s3_secret_key" "$wrtbak_remote_s3_path" "$wrtbak_remote_s3_force_path_style" "$wrtbak_identity_uid") || {
 				wrtbak_remote_error_json remote-test "$wrtbak_target" command_failed "S3 probe failed" ""
 				return 1
 			}
@@ -364,6 +449,17 @@ wrtbak_remote_list_emit_json() {
 	wrtbak_target=$1
 	wrtbak_driver=$2
 	wrtbak_tsv=$3
+	wrtbak_input_tsv=$wrtbak_tsv
+	wrtbak_sorted_tsv=$(mktemp "${TMPDIR:-/tmp}/wrtbak-remote-list-sort.XXXXXX" 2>/dev/null || printf '')
+	if [ -n "$wrtbak_sorted_tsv" ]; then
+		wrtbak_tab=$(printf '\t')
+		if sort -t "$wrtbak_tab" -k6,6 -k5,5r -k1,1r "$wrtbak_tsv" >"$wrtbak_sorted_tsv"; then
+			wrtbak_input_tsv=$wrtbak_sorted_tsv
+		else
+			rm -f "$wrtbak_sorted_tsv"
+		fi
+	fi
+
 	printf '{\n'
 	printf '  "ok": true,\n'
 	printf '  "operation": "remote-list",\n'
@@ -371,8 +467,9 @@ wrtbak_remote_list_emit_json() {
 	printf '  "driver": '; wrtbak_json_string "$wrtbak_driver"; printf ',\n'
 	printf '  "backups": [\n'
 	wrtbak_first=1
-	while IFS='	' read -r wrtbak_path wrtbak_filename wrtbak_format wrtbak_size wrtbak_modified || [ -n "$wrtbak_path" ]; do
+	while IFS='	' read -r wrtbak_path wrtbak_filename wrtbak_format wrtbak_size wrtbak_modified wrtbak_legacy || [ -n "$wrtbak_path" ]; do
 		[ -n "$wrtbak_path" ] || continue
+		wrtbak_remote_path_is_pre_restore "$wrtbak_path" && continue
 		if [ "$wrtbak_first" -eq 1 ]; then
 			wrtbak_first=0
 		else
@@ -392,12 +489,19 @@ wrtbak_remote_list_emit_json() {
 				;;
 		esac
 		printf ',\n'
-		printf '      "modified": '; wrtbak_json_string "$wrtbak_modified"; printf '\n'
+		printf '      "modified": '; wrtbak_json_string "$wrtbak_modified"
+		if [ "$wrtbak_legacy" = true ]; then
+			printf ',\n'
+			printf '      "legacy": true\n'
+		else
+			printf '\n'
+		fi
 		printf '    }'
-	done < "$wrtbak_tsv"
+	done < "$wrtbak_input_tsv"
 	printf '\n'
 	printf '  ]\n'
 	printf '}\n'
+	[ "$wrtbak_input_tsv" = "$wrtbak_tsv" ] || rm -f "$wrtbak_input_tsv"
 }
 
 wrtbak_remote_list() {
@@ -406,6 +510,7 @@ wrtbak_remote_list() {
 		return 1
 	}
 	wrtbak_remote_require_enabled "$wrtbak_target" remote-list || return 1
+	wrtbak_remote_require_identity remote-list "$wrtbak_target" || return 1
 
 	case "$wrtbak_target" in
 		webdav)
@@ -414,12 +519,26 @@ wrtbak_remote_list() {
 				return 1
 			fi
 			wrtbak_remote_require_dependency curl remote-list "$wrtbak_target" || return 1
-			wrtbak_device_id=$(wrtbak_effective_device_id)
+			wrtbak_device_uid=$wrtbak_identity_uid
+			wrtbak_legacy_names=$(wrtbak_remote_legacy_path_names 2>/dev/null || printf '')
 			wrtbak_tsv=$(mktemp "${TMPDIR:-/tmp}/wrtbak-webdav-list.XXXXXX") || {
 				wrtbak_remote_error_json remote-list "$wrtbak_target" command_failed "cannot create temporary file" ""
 				return 1
 			}
-			if ! wrtbak_webdav_list_raw "$wrtbak_remote_webdav_url" "$wrtbak_remote_webdav_username" "$wrtbak_remote_webdav_password" "$wrtbak_remote_webdav_path" "$wrtbak_device_id" > "$wrtbak_tsv"; then
+			wrtbak_current_list_ok=1
+			if ! wrtbak_webdav_list_raw "$wrtbak_remote_webdav_url" "$wrtbak_remote_webdav_username" "$wrtbak_remote_webdav_password" "$wrtbak_remote_webdav_path" "$wrtbak_device_uid" > "$wrtbak_tsv"; then
+				wrtbak_current_list_ok=0
+				if ! : > "$wrtbak_tsv"; then
+					rm -f "$wrtbak_tsv"
+					wrtbak_remote_error_json remote-list "$wrtbak_target" command_failed "cannot write temporary file" ""
+					return 1
+				fi
+			fi
+			printf '%s\n' "$wrtbak_legacy_names" | while IFS= read -r wrtbak_legacy_name || [ -n "$wrtbak_legacy_name" ]; do
+				[ -n "$wrtbak_legacy_name" ] || continue
+				wrtbak_webdav_legacy_list_raw "$wrtbak_remote_webdav_url" "$wrtbak_remote_webdav_username" "$wrtbak_remote_webdav_password" "$wrtbak_remote_webdav_path" "$wrtbak_legacy_name" >> "$wrtbak_tsv" 2>/dev/null || true
+			done
+			if [ "$wrtbak_current_list_ok" -eq 0 ] && ! grep -q . "$wrtbak_tsv"; then
 				rm -f "$wrtbak_tsv"
 				wrtbak_remote_error_json remote-list "$wrtbak_target" unsupported_list "WebDAV listing failed" ""
 				return 1
@@ -433,16 +552,21 @@ wrtbak_remote_list() {
 				return 1
 			fi
 			wrtbak_remote_require_dependency rclone remote-list "$wrtbak_target" || return 1
-			wrtbak_device_id=$(wrtbak_effective_device_id)
+			wrtbak_device_uid=$wrtbak_identity_uid
+			wrtbak_legacy_names=$(wrtbak_remote_legacy_path_names 2>/dev/null || printf '')
 			wrtbak_tsv=$(mktemp "${TMPDIR:-/tmp}/wrtbak-s3-list.XXXXXX") || {
 				wrtbak_remote_error_json remote-list "$wrtbak_target" command_failed "cannot create temporary file" ""
 				return 1
 			}
-			if ! wrtbak_s3_list_raw "$wrtbak_remote_s3_endpoint" "$wrtbak_remote_s3_region" "$wrtbak_remote_s3_bucket" "$wrtbak_remote_s3_access_key" "$wrtbak_remote_s3_secret_key" "$wrtbak_remote_s3_path" "$wrtbak_remote_s3_force_path_style" "$wrtbak_device_id" > "$wrtbak_tsv"; then
+			if ! wrtbak_s3_list_raw "$wrtbak_remote_s3_endpoint" "$wrtbak_remote_s3_region" "$wrtbak_remote_s3_bucket" "$wrtbak_remote_s3_access_key" "$wrtbak_remote_s3_secret_key" "$wrtbak_remote_s3_path" "$wrtbak_remote_s3_force_path_style" "$wrtbak_device_uid" > "$wrtbak_tsv"; then
 				rm -f "$wrtbak_tsv"
 				wrtbak_remote_error_json remote-list "$wrtbak_target" command_failed "S3 listing failed" ""
 				return 1
 			fi
+			printf '%s\n' "$wrtbak_legacy_names" | while IFS= read -r wrtbak_legacy_name || [ -n "$wrtbak_legacy_name" ]; do
+				[ -n "$wrtbak_legacy_name" ] || continue
+				wrtbak_s3_legacy_list_raw "$wrtbak_remote_s3_endpoint" "$wrtbak_remote_s3_region" "$wrtbak_remote_s3_bucket" "$wrtbak_remote_s3_access_key" "$wrtbak_remote_s3_secret_key" "$wrtbak_remote_s3_path" "$wrtbak_remote_s3_force_path_style" "$wrtbak_legacy_name" >> "$wrtbak_tsv" 2>/dev/null || true
+			done
 			wrtbak_remote_list_emit_json "$wrtbak_target" rclone "$wrtbak_tsv"
 			rm -f "$wrtbak_tsv"
 			;;
@@ -513,6 +637,7 @@ wrtbak_remote_schedule_status_json() {
 wrtbak_remote_status_json() {
 	wrtbak_stored_device_id=$(wrtbak_main_option device_id "")
 	wrtbak_generated_device_id=$(wrtbak_generated_device_id)
+	wrtbak_identity_load_current || true
 	if [ -n "$wrtbak_stored_device_id" ]; then
 		wrtbak_device_id=$(wrtbak_remote_normalize_name "$wrtbak_stored_device_id")
 	else
@@ -522,6 +647,12 @@ wrtbak_remote_status_json() {
 	printf '{\n'
 	printf '  "ok": true,\n'
 	printf '  "operation": "remote-status",\n'
+	printf '  "uid": '; wrtbak_json_string "$wrtbak_identity_uid"; printf ',\n'
+	printf '  "generated_uid": '; wrtbak_json_string "$wrtbak_identity_uid"; printf ',\n'
+	printf '  "uid_algorithm": '; wrtbak_json_string "$wrtbak_identity_uid_algorithm"; printf ',\n'
+	printf '  "uid_status": '; wrtbak_json_string "$wrtbak_identity_status"; printf ',\n'
+	printf '  "board_slug": '; wrtbak_json_string "$wrtbak_identity_board_slug"; printf ',\n'
+	printf '  "mac_source": '; wrtbak_json_string "$wrtbak_identity_mac_source"; printf ',\n'
 	printf '  "device_id": '; wrtbak_json_string "$wrtbak_device_id"; printf ',\n'
 	printf '  "generated_device_id": '; wrtbak_json_string "$wrtbak_generated_device_id"; printf ',\n'
 	printf '  "default_target": '; wrtbak_json_string "$(wrtbak_main_option default_target webdav)"; printf ',\n'
@@ -611,14 +742,180 @@ wrtbak_remote_format_for_path() {
 	esac
 }
 
-wrtbak_remote_device_prefix() {
+wrtbak_remote_path_is_pre_restore() {
+	case "$1" in
+		devices/*/pre-restore/*)
+			return 0
+			;;
+		*/devices/*/pre-restore/*)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+wrtbak_restore_cache_dir() { printf '%s\n' "$(wrtbak_root_path /tmp/wrtbak/restore-cache)"; }
+
+wrtbak_remote_safe_basename() { printf '%s' "$(basename -- "$1")" | tr -c 'A-Za-z0-9._-' '-'; }
+
+wrtbak_remote_cache_path_for() {
+	wrtbak_cache_remote_path=$(wrtbak_normalize_remote_path "$1") || return 1
+	wrtbak_cache_dir=$(wrtbak_restore_cache_dir)
+	mkdir -p "$wrtbak_cache_dir" || return 1
+	chmod 700 "$wrtbak_cache_dir" || return 1
+	wrtbak_cache_hash=$(printf '%s' "$wrtbak_cache_remote_path" | sha256sum | awk '{ print substr($1, 1, 12) }')
+	wrtbak_cache_basename=$(wrtbak_remote_safe_basename "$wrtbak_cache_remote_path")
+	printf '%s/%s-%s\n' "$wrtbak_cache_dir" "$wrtbak_cache_hash" "$wrtbak_cache_basename"
+}
+
+wrtbak_remote_json_unescape() {
+	sed 's/\\"/"/g;s/\\\\/\\/g'
+}
+
+wrtbak_remote_sidecar_string_field() {
+	wrtbak_sidecar_field=$1
+	wrtbak_sidecar_file=$2
+	awk -v field="$wrtbak_sidecar_field" '
+		$0 ~ "\"" field "\"" {
+			line = $0
+			sub("^[[:space:]]*\"" field "\"[[:space:]]*:[[:space:]]*\"", "", line)
+			sub("\"[,]?[[:space:]]*$", "", line)
+			print line
+			exit
+		}
+	' "$wrtbak_sidecar_file" | wrtbak_remote_json_unescape
+}
+
+wrtbak_remote_sidecar_number_field() {
+	wrtbak_sidecar_field=$1
+	wrtbak_sidecar_file=$2
+	awk -v field="$wrtbak_sidecar_field" '
+		$0 ~ "\"" field "\"" {
+			line = $0
+			sub("^[[:space:]]*\"" field "\"[[:space:]]*:[[:space:]]*", "", line)
+			sub("[^0-9].*$", "", line)
+			print line
+			exit
+		}
+	' "$wrtbak_sidecar_file"
+}
+
+wrtbak_remote_sidecar_matches() {
+	wrtbak_match_sidecar=$1
+	wrtbak_match_local_path=$2
+	wrtbak_match_target=$3
+	wrtbak_match_driver=$4
+	wrtbak_match_remote_path=$5
+	wrtbak_match_size=$6
+	wrtbak_match_remote_modified=$7
+	wrtbak_match_remote_etag=$8
+
+	[ -r "$wrtbak_match_sidecar" ] || return 1
+	[ -f "$wrtbak_match_local_path" ] || return 1
+	[ "$(wrtbak_remote_sidecar_string_field target "$wrtbak_match_sidecar")" = "$wrtbak_match_target" ] || return 1
+	[ "$(wrtbak_remote_sidecar_string_field driver "$wrtbak_match_sidecar")" = "$wrtbak_match_driver" ] || return 1
+	[ "$(wrtbak_remote_sidecar_string_field remote_path "$wrtbak_match_sidecar")" = "$wrtbak_match_remote_path" ] || return 1
+	[ "$(wrtbak_remote_sidecar_number_field size "$wrtbak_match_sidecar")" = "$wrtbak_match_size" ] || return 1
+	wrtbak_match_sidecar_sha=$(wrtbak_remote_sidecar_string_field sha256 "$wrtbak_match_sidecar")
+	[ -n "$wrtbak_match_sidecar_sha" ] || return 1
+	[ "$(wrtbak_sha256_of "$wrtbak_match_local_path")" = "$wrtbak_match_sidecar_sha" ] || return 1
+	if [ -n "$wrtbak_match_remote_modified" ]; then
+		[ "$(wrtbak_remote_sidecar_string_field remote_modified "$wrtbak_match_sidecar")" = "$wrtbak_match_remote_modified" ] || return 1
+	fi
+	if [ -n "$wrtbak_match_remote_etag" ]; then
+		[ "$(wrtbak_remote_sidecar_string_field remote_etag "$wrtbak_match_sidecar")" = "$wrtbak_match_remote_etag" ] || return 1
+	fi
+	return 0
+}
+
+wrtbak_remote_write_sidecar() {
+	wrtbak_write_sidecar=$1
+	wrtbak_write_local_path=$2
+	wrtbak_write_target=$3
+	wrtbak_write_driver=$4
+	wrtbak_write_remote_path=$5
+	wrtbak_write_filename=$6
+	wrtbak_write_format=$7
+	wrtbak_write_size=$8
+	wrtbak_write_remote_modified=$9
+	shift 9
+	wrtbak_write_remote_etag=$1
+	wrtbak_write_sha=$(wrtbak_sha256_of "$wrtbak_write_local_path") || return 2
+	wrtbak_write_tmp="$wrtbak_write_sidecar.tmp.$$"
+	rm -f "$wrtbak_write_tmp" 2>/dev/null || true
+	: > "$wrtbak_write_tmp" || return 1
+	chmod 600 "$wrtbak_write_tmp" || {
+		rm -f "$wrtbak_write_tmp"
+		return 1
+	}
+	{
+		printf '{\n'
+		printf '  "target": '; wrtbak_json_string "$wrtbak_write_target"; printf ',\n'
+		printf '  "driver": '; wrtbak_json_string "$wrtbak_write_driver"; printf ',\n'
+		printf '  "remote_path": '; wrtbak_json_string "$wrtbak_write_remote_path"; printf ',\n'
+		printf '  "filename": '; wrtbak_json_string "$wrtbak_write_filename"; printf ',\n'
+		printf '  "format": '; wrtbak_json_string "$wrtbak_write_format"; printf ',\n'
+		printf '  "size": %s,\n' "$wrtbak_write_size"
+		printf '  "remote_modified": '; wrtbak_json_string "$wrtbak_write_remote_modified"; printf ',\n'
+		printf '  "remote_etag": '; wrtbak_json_string "$wrtbak_write_remote_etag"; printf ',\n'
+		printf '  "downloaded_at": '; wrtbak_json_string "$(wrtbak_created_at)"; printf ',\n'
+		printf '  "sha256": '; wrtbak_json_string "$wrtbak_write_sha"; printf ',\n'
+		printf '  "provider": '; wrtbak_json_string "$wrtbak_write_target"; printf ',\n'
+		printf '  "remote_name": '; wrtbak_json_string "$wrtbak_write_target"; printf ',\n'
+		printf '  "cache_path": '; wrtbak_json_string "$wrtbak_write_local_path"; printf ',\n'
+		printf '  "mtime": '; wrtbak_json_string "$wrtbak_write_remote_modified"; printf '\n'
+		printf '}\n'
+	} > "$wrtbak_write_tmp" || {
+		rm -f "$wrtbak_write_tmp"
+		return 1
+	}
+	if ! mv -f "$wrtbak_write_tmp" "$wrtbak_write_sidecar"; then
+		rm -f "$wrtbak_write_tmp"
+		return 3
+	fi
+}
+
+wrtbak_remote_download_success_json() {
+	wrtbak_success_target=$1
+	wrtbak_success_driver=$2
+	wrtbak_success_remote_path=$3
+	wrtbak_success_local_path=$4
+	wrtbak_success_sidecar=$5
+	wrtbak_success_filename=$6
+	wrtbak_success_format=$7
+	wrtbak_success_size=$8
+	wrtbak_success_remote_modified=$9
+	shift 9
+	wrtbak_success_remote_etag=$1
+	wrtbak_success_sha=$2
+	printf '{\n'
+	printf '  "ok": true,\n'
+	printf '  "operation": "remote-download",\n'
+	printf '  "target": '; wrtbak_json_string "$wrtbak_success_target"; printf ',\n'
+	printf '  "driver": '; wrtbak_json_string "$wrtbak_success_driver"; printf ',\n'
+	printf '  "remote_path": '; wrtbak_json_string "$wrtbak_success_remote_path"; printf ',\n'
+	printf '  "local_path": '; wrtbak_json_string "$wrtbak_success_local_path"; printf ',\n'
+	printf '  "sidecar_path": '; wrtbak_json_string "$wrtbak_success_sidecar"; printf ',\n'
+	printf '  "filename": '; wrtbak_json_string "$wrtbak_success_filename"; printf ',\n'
+	printf '  "format": '; wrtbak_json_string "$wrtbak_success_format"; printf ',\n'
+	printf '  "size": %s,\n' "$wrtbak_success_size"
+	printf '  "remote_modified": '; wrtbak_json_string "$wrtbak_success_remote_modified"; printf ',\n'
+	printf '  "remote_etag": '; wrtbak_json_string "$wrtbak_success_remote_etag"; printf ',\n'
+	printf '  "sha256": '; wrtbak_json_string "$wrtbak_success_sha"; printf '\n'
+	printf '}\n'
+}
+
+wrtbak_remote_target_base() {
 	wrtbak_target=$1
 	case "$wrtbak_target" in
 		webdav)
-			wrtbak_join_remote_path "$wrtbak_remote_webdav_path" wrtbak "$(wrtbak_effective_device_id)"
+			printf '%s\n' "$wrtbak_remote_webdav_path"
 			;;
 		s3)
-			wrtbak_join_remote_path "$wrtbak_remote_s3_path" wrtbak "$(wrtbak_effective_device_id)"
+			printf '%s\n' "$wrtbak_remote_s3_path"
+			;;
+		*)
+			return 1
 			;;
 	esac
 }
@@ -626,17 +923,303 @@ wrtbak_remote_device_prefix() {
 wrtbak_remote_validate_backup_path() {
 	wrtbak_target=$1
 	wrtbak_path=$2
+	wrtbak_legacy_inspect=${3:-0}
 	wrtbak_path=$(wrtbak_normalize_remote_path "$wrtbak_path") || return 1
-	wrtbak_prefix=$(wrtbak_remote_device_prefix "$wrtbak_target") || return 1
+	wrtbak_base=$(wrtbak_remote_target_base "$wrtbak_target") || return 1
+	wrtbak_prefix=$(wrtbak_remote_device_prefix "$wrtbak_base") || return 1
 	case "$wrtbak_path" in
 		"$wrtbak_prefix"/*)
+			wrtbak_remote_path_is_pre_restore "$wrtbak_path" && return 1
+			printf '%s\n' "$wrtbak_path"
+			return 0
+			;;
+	esac
+	if wrtbak_bool_enabled "$wrtbak_legacy_inspect"; then
+		wrtbak_legacy_prefixes=$(wrtbak_remote_legacy_path_prefixes "$wrtbak_base" 2>/dev/null || printf '')
+		wrtbak_old_ifs=$IFS
+		IFS='
+'
+		for wrtbak_legacy_prefix in $wrtbak_legacy_prefixes; do
+			IFS=$wrtbak_old_ifs
+			[ -n "$wrtbak_legacy_prefix" ] || continue
+			case "$wrtbak_path" in
+				"$wrtbak_legacy_prefix"/*)
+					printf '%s\n' "$wrtbak_path"
+					return 0
+					;;
+			esac
+			IFS='
+'
+		done
+		IFS=$wrtbak_old_ifs
+	fi
+	return 1
+}
+
+wrtbak_remote_validate_current_backup_path() {
+	wrtbak_target=$1
+	wrtbak_path=$2
+	wrtbak_remote_validate_backup_path "$wrtbak_target" "$wrtbak_path" 0
+}
+
+wrtbak_remote_upload_alias_index_driver() {
+	wrtbak_alias_target=$1
+	wrtbak_alias_path=$2
+	wrtbak_alias_uid=$3
+	wrtbak_alias_alias=$4
+	wrtbak_alias_latest_key=$5
+	wrtbak_alias_tmp=$(mktemp "${TMPDIR:-/tmp}/wrtbak-alias-index.XXXXXX") || return 1
+	chmod 600 "$wrtbak_alias_tmp" || {
+		rm -f "$wrtbak_alias_tmp"
+		return 1
+	}
+	{
+		printf '{\n'
+		printf '  "alias": '; wrtbak_json_string "$wrtbak_alias_alias"; printf ',\n'
+		printf '  "uid": '; wrtbak_json_string "$wrtbak_alias_uid"; printf ',\n'
+		printf '  "updated_at": '; wrtbak_json_string "$(wrtbak_created_at)"; printf ',\n'
+		printf '  "latest_backup_key": '; wrtbak_json_string "$wrtbak_alias_latest_key"; printf '\n'
+		printf '}\n'
+	} > "$wrtbak_alias_tmp" || {
+		rm -f "$wrtbak_alias_tmp"
+		return 1
+	}
+	if wrtbak_remote_upload_driver "$wrtbak_alias_target" "$wrtbak_alias_tmp" "$wrtbak_alias_path"; then
+		rm -f "$wrtbak_alias_tmp"
+		return 0
+	fi
+	rm -f "$wrtbak_alias_tmp"
+	return 1
+}
+wrtbak_remote_stat_driver() {
+	wrtbak_stat_target=$1
+	wrtbak_stat_remote_path=$2
+	case "$wrtbak_stat_target" in
+		webdav)
+			wrtbak_webdav_stat_file "$wrtbak_remote_webdav_url" "$wrtbak_remote_webdav_username" "$wrtbak_remote_webdav_password" "$wrtbak_stat_remote_path"
+			;;
+		s3)
+			wrtbak_s3_stat_file "$wrtbak_remote_s3_endpoint" "$wrtbak_remote_s3_region" "$wrtbak_remote_s3_bucket" "$wrtbak_remote_s3_access_key" "$wrtbak_remote_s3_secret_key" "$wrtbak_remote_s3_force_path_style" "$wrtbak_stat_remote_path"
 			;;
 		*)
 			return 1
 			;;
 	esac
-	wrtbak_remote_format_for_path "$wrtbak_path" >/dev/null || return 1
-	printf '%s\n' "$wrtbak_path"
+}
+
+wrtbak_remote_download_driver() {
+	wrtbak_download_target=$1
+	wrtbak_download_remote_path=$2
+	wrtbak_download_local_path=$3
+	case "$wrtbak_download_target" in
+		webdav)
+			wrtbak_webdav_download_file "$wrtbak_remote_webdav_url" "$wrtbak_remote_webdav_username" "$wrtbak_remote_webdav_password" "$wrtbak_download_remote_path" "$wrtbak_download_local_path"
+			;;
+		s3)
+			wrtbak_s3_download_file "$wrtbak_remote_s3_endpoint" "$wrtbak_remote_s3_region" "$wrtbak_remote_s3_bucket" "$wrtbak_remote_s3_access_key" "$wrtbak_remote_s3_secret_key" "$wrtbak_remote_s3_force_path_style" "$wrtbak_download_remote_path" "$wrtbak_download_local_path"
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+wrtbak_remote_download_into_cache() {
+	wrtbak_download_cache_target=$1
+	wrtbak_download_cache_driver=$2
+	wrtbak_download_cache_remote_path=$3
+	wrtbak_download_cache_local_path=$4
+	wrtbak_download_cache_sidecar=$5
+	wrtbak_download_cache_filename=$6
+	wrtbak_download_cache_format=$7
+	wrtbak_download_cache_size=$8
+	wrtbak_download_cache_remote_modified=$9
+	shift 9
+	wrtbak_download_cache_remote_etag=$1
+	wrtbak_download_part="$wrtbak_download_cache_local_path.part.$$"
+	rm -f "$wrtbak_download_part"
+	if ! wrtbak_remote_download_driver "$wrtbak_download_cache_target" "$wrtbak_download_cache_remote_path" "$wrtbak_download_part"; then
+		rm -f "$wrtbak_download_part"
+		return 10
+	fi
+	wrtbak_download_actual_size=$(stat -c '%s' "$wrtbak_download_part" 2>/dev/null) || {
+		rm -f "$wrtbak_download_part"
+		return 11
+	}
+	if [ "$wrtbak_download_actual_size" != "$wrtbak_download_cache_size" ]; then
+		rm -f "$wrtbak_download_part"
+		return 11
+	fi
+	if ! mv -f "$wrtbak_download_part" "$wrtbak_download_cache_local_path"; then
+		rm -f "$wrtbak_download_part"
+		return 12
+	fi
+	wrtbak_sidecar_status=0
+	wrtbak_remote_write_sidecar "$wrtbak_download_cache_sidecar" "$wrtbak_download_cache_local_path" "$wrtbak_download_cache_target" "$wrtbak_download_cache_driver" "$wrtbak_download_cache_remote_path" "$wrtbak_download_cache_filename" "$wrtbak_download_cache_format" "$wrtbak_download_cache_size" "$wrtbak_download_cache_remote_modified" "$wrtbak_download_cache_remote_etag" || wrtbak_sidecar_status=$?
+	if [ "$wrtbak_sidecar_status" -ne 0 ]; then
+		rm -f "$wrtbak_download_cache_local_path"
+		if [ "$wrtbak_sidecar_status" -eq 2 ]; then
+			return 13
+		fi
+		return 14
+	fi
+	return 0
+}
+
+wrtbak_remote_download() {
+	wrtbak_target=$(wrtbak_remote_resolve_target "$1") || {
+		wrtbak_remote_error_json remote-download "$1" unsupported_provider "unknown remote target" ""
+		return 1
+	}
+	wrtbak_requested_path=$2
+	wrtbak_legacy_inspect=${3:-0}
+	wrtbak_remote_require_enabled "$wrtbak_target" remote-download || return 1
+	case "$wrtbak_target" in
+		webdav)
+			wrtbak_remote_load_webdav_config || {
+				wrtbak_remote_error_json remote-download "$wrtbak_target" invalid_config "WebDAV target is incomplete" ""
+				return 1
+			}
+			if ! command -v curl >/dev/null 2>&1; then
+				wrtbak_remote_error_json remote-download "$wrtbak_target" missing_tool "curl is not installed" ""
+				return 1
+			fi
+			wrtbak_download_driver_name=curl
+			;;
+		s3)
+			wrtbak_remote_load_s3_config || {
+				wrtbak_remote_error_json remote-download "$wrtbak_target" invalid_config "S3 target is incomplete" ""
+				return 1
+			}
+			if ! command -v rclone >/dev/null 2>&1; then
+				wrtbak_remote_error_json remote-download "$wrtbak_target" missing_tool "rclone is not installed" ""
+				return 1
+			fi
+			wrtbak_download_driver_name=rclone
+			;;
+	esac
+	wrtbak_path=$(wrtbak_remote_validate_backup_path "$wrtbak_target" "$wrtbak_requested_path" "$wrtbak_legacy_inspect") || {
+		wrtbak_remote_error_json remote-download "$wrtbak_target" invalid_config "remote path is outside current device prefix" ""
+		return 1
+	}
+	wrtbak_format=$(wrtbak_remote_format_for_path "$wrtbak_path") || {
+		wrtbak_remote_error_json remote-download "$wrtbak_target" invalid_format "remote backup suffix is not supported" "$wrtbak_path"
+		return 1
+	}
+
+	if ! wrtbak_remote_lock_acquire; then
+		wrtbak_remote_error_json remote-download "$wrtbak_target" busy "another remote operation is running" ""
+		return 1
+	fi
+
+	wrtbak_stat_tsv=$(mktemp "${TMPDIR:-/tmp}/wrtbak-remote-stat.XXXXXX") || {
+		wrtbak_remote_lock_release
+		wrtbak_remote_error_json remote-download "$wrtbak_target" command_failed "cannot create temporary file" ""
+		return 1
+	}
+	if ! wrtbak_remote_stat_driver "$wrtbak_target" "$wrtbak_path" > "$wrtbak_stat_tsv"; then
+		rm -f "$wrtbak_stat_tsv"
+		wrtbak_history_append remote-download "$wrtbak_target" false command_failed "remote stat failed" "$wrtbak_path"
+		wrtbak_remote_lock_release
+		wrtbak_remote_error_json remote-download "$wrtbak_target" command_failed "remote metadata lookup failed" ""
+		return 1
+	fi
+	wrtbak_tab=$(printf '\t')
+	wrtbak_size=$(awk -F "$wrtbak_tab" 'NR == 1 { print $1 }' "$wrtbak_stat_tsv")
+	wrtbak_remote_modified=$(awk -F "$wrtbak_tab" 'NR == 1 { print $2 }' "$wrtbak_stat_tsv")
+	wrtbak_remote_etag=$(awk -F "$wrtbak_tab" 'NR == 1 { print $3 }' "$wrtbak_stat_tsv")
+	rm -f "$wrtbak_stat_tsv"
+	case "$wrtbak_size" in
+		""|*[!0-9]*)
+			wrtbak_history_append remote-download "$wrtbak_target" false size_unavailable "remote size is unavailable" "$wrtbak_path"
+			wrtbak_remote_lock_release
+			wrtbak_remote_error_json remote-download "$wrtbak_target" size_unavailable "remote size is unavailable" "$wrtbak_path"
+			return 1
+			;;
+	esac
+
+	wrtbak_filename=$(basename -- "$wrtbak_path")
+	wrtbak_download_cache_path=$(wrtbak_remote_cache_path_for "$wrtbak_path") || {
+		wrtbak_remote_lock_release
+		wrtbak_remote_error_json remote-download "$wrtbak_target" command_failed "cannot prepare restore cache" ""
+		return 1
+	}
+	wrtbak_sidecar="$wrtbak_download_cache_path.remote.json"
+
+	if [ -e "$wrtbak_download_cache_path" ]; then
+		if [ ! -f "$wrtbak_download_cache_path" ] || [ ! -r "$wrtbak_sidecar" ]; then
+			wrtbak_history_append remote-download "$wrtbak_target" false cache_conflict "restore cache conflict" "$wrtbak_path"
+			wrtbak_remote_lock_release
+			wrtbak_remote_error_json remote-download "$wrtbak_target" cache_conflict "restore cache exists without a matching sidecar" "$wrtbak_path"
+			return 1
+		fi
+		wrtbak_sidecar_target=$(wrtbak_remote_sidecar_string_field target "$wrtbak_sidecar")
+		wrtbak_sidecar_driver=$(wrtbak_remote_sidecar_string_field driver "$wrtbak_sidecar")
+		wrtbak_sidecar_remote_path=$(wrtbak_remote_sidecar_string_field remote_path "$wrtbak_sidecar")
+		if [ "$wrtbak_sidecar_target" != "$wrtbak_target" ] || [ "$wrtbak_sidecar_driver" != "$wrtbak_download_driver_name" ] || [ "$wrtbak_sidecar_remote_path" != "$wrtbak_path" ]; then
+			wrtbak_history_append remote-download "$wrtbak_target" false cache_conflict "restore cache identity mismatch" "$wrtbak_path"
+			wrtbak_remote_lock_release
+			wrtbak_remote_error_json remote-download "$wrtbak_target" cache_conflict "restore cache sidecar does not match this remote backup" "$wrtbak_path"
+			return 1
+		fi
+		wrtbak_sidecar_sha=$(wrtbak_remote_sidecar_string_field sha256 "$wrtbak_sidecar")
+		wrtbak_local_sha=$(wrtbak_sha256_of "$wrtbak_download_cache_path") || {
+			wrtbak_history_append remote-download "$wrtbak_target" false hash_failed "sha256 calculation failed" "$wrtbak_path"
+			wrtbak_remote_lock_release
+			wrtbak_remote_error_json remote-download "$wrtbak_target" hash_failed "sha256 calculation failed" "$wrtbak_path"
+			return 1
+		}
+		if [ -z "$wrtbak_sidecar_sha" ] || [ "$wrtbak_sidecar_sha" != "$wrtbak_local_sha" ]; then
+			wrtbak_history_append remote-download "$wrtbak_target" false cache_conflict "restore cache sha mismatch" "$wrtbak_path"
+			wrtbak_remote_lock_release
+			wrtbak_remote_error_json remote-download "$wrtbak_target" cache_conflict "restore cache file does not match its sidecar" "$wrtbak_path"
+			return 1
+		fi
+		if wrtbak_remote_sidecar_matches "$wrtbak_sidecar" "$wrtbak_download_cache_path" "$wrtbak_target" "$wrtbak_download_driver_name" "$wrtbak_path" "$wrtbak_size" "$wrtbak_remote_modified" "$wrtbak_remote_etag"; then
+			wrtbak_history_append remote-download "$wrtbak_target" true "" "download cache reused" "$wrtbak_path"
+			wrtbak_remote_lock_release
+			wrtbak_remote_download_success_json "$wrtbak_target" "$wrtbak_download_driver_name" "$wrtbak_path" "$wrtbak_download_cache_path" "$wrtbak_sidecar" "$wrtbak_filename" "$wrtbak_format" "$wrtbak_size" "$wrtbak_remote_modified" "$wrtbak_remote_etag" "$wrtbak_local_sha"
+			return 0
+		fi
+	else
+		rm -f "$wrtbak_sidecar"
+	fi
+
+	wrtbak_download_status=0
+	wrtbak_remote_download_into_cache "$wrtbak_target" "$wrtbak_download_driver_name" "$wrtbak_path" "$wrtbak_download_cache_path" "$wrtbak_sidecar" "$wrtbak_filename" "$wrtbak_format" "$wrtbak_size" "$wrtbak_remote_modified" "$wrtbak_remote_etag" || wrtbak_download_status=$?
+	if [ "$wrtbak_download_status" -ne 0 ]; then
+		wrtbak_download_message="remote download failed"
+		case "$wrtbak_download_status" in
+			10|11)
+				wrtbak_download_code=download_failed
+				;;
+			13)
+				wrtbak_download_code=hash_failed
+				wrtbak_download_message="sha256 calculation failed"
+				;;
+			14)
+				wrtbak_download_code=cache_write_failed
+				wrtbak_download_message="sidecar write failed"
+				;;
+			*)
+				wrtbak_download_code=download_failed
+				;;
+		esac
+		wrtbak_history_append remote-download "$wrtbak_target" false "$wrtbak_download_code" "$wrtbak_download_message" "$wrtbak_path"
+		wrtbak_remote_lock_release
+		wrtbak_remote_error_json remote-download "$wrtbak_target" "$wrtbak_download_code" "$wrtbak_download_message" ""
+		return 1
+	fi
+	wrtbak_sha=$(wrtbak_sha256_of "$wrtbak_download_cache_path") || {
+		rm -f "$wrtbak_download_cache_path" "$wrtbak_sidecar"
+		wrtbak_history_append remote-download "$wrtbak_target" false hash_failed "sha256 calculation failed" "$wrtbak_path"
+		wrtbak_remote_lock_release
+		wrtbak_remote_error_json remote-download "$wrtbak_target" hash_failed "sha256 calculation failed" ""
+		return 1
+	}
+	wrtbak_history_append remote-download "$wrtbak_target" true "" "download complete" "$wrtbak_path"
+	wrtbak_remote_lock_release
+	wrtbak_remote_download_success_json "$wrtbak_target" "$wrtbak_download_driver_name" "$wrtbak_path" "$wrtbak_download_cache_path" "$wrtbak_sidecar" "$wrtbak_filename" "$wrtbak_format" "$wrtbak_size" "$wrtbak_remote_modified" "$wrtbak_remote_etag" "$wrtbak_sha"
 }
 
 wrtbak_remote_create_local_archive() {
@@ -682,6 +1265,86 @@ wrtbak_remote_upload_driver() {
 	esac
 }
 
+wrtbak_remote_pre_restore_upload() {
+	wrtbak_pre_target=$(wrtbak_remote_resolve_target "$1") || return 1
+	wrtbak_pre_local_file=$2
+	wrtbak_pre_filename=$3
+	wrtbak_pre_sha=$4
+	wrtbak_pre_size=$5
+	wrtbak_remote_pre_restore_uploaded_key=
+
+	case "$wrtbak_pre_target" in
+		webdav)
+			wrtbak_remote_load_webdav_config || return 1
+			wrtbak_bool_enabled "$wrtbak_remote_webdav_enabled" || return 1
+			command -v curl >/dev/null 2>&1 || return 1
+			wrtbak_pre_driver=curl
+			;;
+		s3)
+			wrtbak_remote_load_s3_config || return 1
+			wrtbak_bool_enabled "$wrtbak_remote_s3_enabled" || return 1
+			command -v rclone >/dev/null 2>&1 || return 1
+			wrtbak_pre_driver=rclone
+			;;
+		*)
+			return 1
+			;;
+	esac
+	wrtbak_identity_current_uid >/dev/null 2>&1 || return 1
+	wrtbak_pre_base=$(wrtbak_remote_target_base "$wrtbak_pre_target") || return 1
+	wrtbak_pre_prefix=$(wrtbak_remote_pre_restore_prefix "$wrtbak_pre_base") || return 1
+	wrtbak_pre_remote_path=$(wrtbak_join_remote_path "$wrtbak_pre_prefix" "$wrtbak_pre_filename") || return 1
+
+	if ! wrtbak_remote_lock_acquire; then
+		return 1
+	fi
+	if ! wrtbak_remote_upload_driver "$wrtbak_pre_target" "$wrtbak_pre_local_file" "$wrtbak_pre_remote_path"; then
+		wrtbak_remote_lock_release
+		return 10
+	fi
+
+	wrtbak_pre_stat=$(mktemp "${TMPDIR:-/tmp}/wrtbak-pre-restore-stat.XXXXXX") || {
+		wrtbak_remote_lock_release
+		return 20
+	}
+	if ! wrtbak_remote_stat_driver "$wrtbak_pre_target" "$wrtbak_pre_remote_path" > "$wrtbak_pre_stat"; then
+		rm -f "$wrtbak_pre_stat"
+		wrtbak_remote_lock_release
+		return 20
+	fi
+	wrtbak_tab=$(printf '\t')
+	wrtbak_pre_remote_size=$(awk -F "$wrtbak_tab" 'NR == 1 { print $1 }' "$wrtbak_pre_stat")
+	rm -f "$wrtbak_pre_stat"
+	if [ "$wrtbak_pre_remote_size" != "$wrtbak_pre_size" ]; then
+		wrtbak_remote_lock_release
+		return 21
+	fi
+
+	wrtbak_pre_verify=$(mktemp "${TMPDIR:-/tmp}/wrtbak-pre-restore-verify.XXXXXX") || {
+		wrtbak_remote_lock_release
+		return 20
+	}
+	if ! wrtbak_remote_download_driver "$wrtbak_pre_target" "$wrtbak_pre_remote_path" "$wrtbak_pre_verify"; then
+		rm -f "$wrtbak_pre_verify"
+		wrtbak_remote_lock_release
+		return 22
+	fi
+	wrtbak_pre_verify_sha=$(wrtbak_sha256_of "$wrtbak_pre_verify" 2>/dev/null || true)
+	rm -f "$wrtbak_pre_verify"
+	if [ -z "$wrtbak_pre_verify_sha" ]; then
+		wrtbak_remote_lock_release
+		return 24
+	fi
+	if [ "$wrtbak_pre_verify_sha" != "$wrtbak_pre_sha" ]; then
+		wrtbak_remote_lock_release
+		return 23
+	fi
+
+	wrtbak_history_append restore-prebackup "$wrtbak_pre_target" true "" "pre-restore upload complete" "$wrtbak_pre_remote_path"
+	wrtbak_remote_lock_release
+	wrtbak_remote_pre_restore_uploaded_key=$wrtbak_pre_remote_path
+}
+
 wrtbak_remote_delete_driver() {
 	wrtbak_delete_driver_target=$1
 	wrtbak_delete_driver_remote_path=$2
@@ -701,12 +1364,13 @@ wrtbak_remote_delete_driver() {
 wrtbak_remote_list_tsv_unlocked() {
 	wrtbak_target=$1
 	wrtbak_output=$2
+	wrtbak_uid=$(wrtbak_identity_current_uid) || return 1
 	case "$wrtbak_target" in
 		webdav)
-			wrtbak_webdav_list_raw "$wrtbak_remote_webdav_url" "$wrtbak_remote_webdav_username" "$wrtbak_remote_webdav_password" "$wrtbak_remote_webdav_path" "$(wrtbak_effective_device_id)" > "$wrtbak_output"
+			wrtbak_webdav_list_raw "$wrtbak_remote_webdav_url" "$wrtbak_remote_webdav_username" "$wrtbak_remote_webdav_password" "$wrtbak_remote_webdav_path" "$wrtbak_uid" > "$wrtbak_output"
 			;;
 		s3)
-			wrtbak_s3_list_raw "$wrtbak_remote_s3_endpoint" "$wrtbak_remote_s3_region" "$wrtbak_remote_s3_bucket" "$wrtbak_remote_s3_access_key" "$wrtbak_remote_s3_secret_key" "$wrtbak_remote_s3_path" "$wrtbak_remote_s3_force_path_style" "$(wrtbak_effective_device_id)" > "$wrtbak_output"
+			wrtbak_s3_list_raw "$wrtbak_remote_s3_endpoint" "$wrtbak_remote_s3_region" "$wrtbak_remote_s3_bucket" "$wrtbak_remote_s3_access_key" "$wrtbak_remote_s3_secret_key" "$wrtbak_remote_s3_path" "$wrtbak_remote_s3_force_path_style" "$wrtbak_uid" > "$wrtbak_output"
 			;;
 		*)
 			return 1
@@ -734,6 +1398,20 @@ wrtbak_remote_prune_unlocked() {
 	: > "$wrtbak_delete_list"
 	wrtbak_remote_list_tsv_unlocked "$wrtbak_target" "$wrtbak_list" || {
 		rm -f "$wrtbak_list" "$wrtbak_delete_list"
+		return 1
+	}
+	wrtbak_filtered_list=$(mktemp "${TMPDIR:-/tmp}/wrtbak-prune-filtered.XXXXXX") || {
+		rm -f "$wrtbak_list" "$wrtbak_delete_list"
+		return 1
+	}
+	while IFS= read -r wrtbak_list_row || [ -n "$wrtbak_list_row" ]; do
+		[ -n "$wrtbak_list_row" ] || continue
+		wrtbak_list_path=${wrtbak_list_row%%	*}
+		wrtbak_remote_path_is_pre_restore "$wrtbak_list_path" && continue
+		printf '%s\n' "$wrtbak_list_row" >> "$wrtbak_filtered_list"
+	done < "$wrtbak_list"
+	mv "$wrtbak_filtered_list" "$wrtbak_list" || {
+		rm -f "$wrtbak_filtered_list" "$wrtbak_list" "$wrtbak_delete_list"
 		return 1
 	}
 	wrtbak_tab=$(printf '\t')
@@ -830,6 +1508,7 @@ wrtbak_remote_upload() {
 			wrtbak_upload_driver_name=rclone
 			;;
 	esac
+	wrtbak_remote_require_identity remote-upload "$wrtbak_target" || return 1
 	if ! wrtbak_remote_lock_acquire; then
 		wrtbak_remote_error_json remote-upload "$wrtbak_target" busy "another remote operation is running" ""
 		return 1
@@ -846,28 +1525,37 @@ wrtbak_remote_upload() {
 	wrtbak_filename=$(printf '%s' "$wrtbak_local_info" | awk -F '	' '{ print $2 }')
 	wrtbak_size=$(wrtbak_size_of "$wrtbak_local_path")
 	wrtbak_sha=$(wrtbak_sha256_of "$wrtbak_local_path")
-	case "$wrtbak_target" in
-		webdav)
-			wrtbak_remote_path=$(wrtbak_join_remote_path "$wrtbak_remote_webdav_path" wrtbak "$(wrtbak_effective_device_id)" "$wrtbak_format" "$wrtbak_year" "$wrtbak_filename") || {
-				wrtbak_remote_lock_release
-				wrtbak_remote_error_json remote-upload "$wrtbak_target" invalid_config "cannot build remote path" ""
-				return 1
-			}
-			;;
-		s3)
-			wrtbak_remote_path=$(wrtbak_join_remote_path "$wrtbak_remote_s3_path" wrtbak "$(wrtbak_effective_device_id)" "$wrtbak_format" "$wrtbak_year" "$wrtbak_filename") || {
-				wrtbak_remote_lock_release
-				wrtbak_remote_error_json remote-upload "$wrtbak_target" invalid_config "cannot build remote path" ""
-				return 1
-			}
-			;;
-	esac
+	wrtbak_remote_base=$(wrtbak_remote_target_base "$wrtbak_target") || {
+		wrtbak_remote_lock_release
+		wrtbak_remote_error_json remote-upload "$wrtbak_target" invalid_config "cannot build remote path" ""
+		return 1
+	}
+	wrtbak_remote_prefix=$(wrtbak_remote_device_prefix "$wrtbak_remote_base") || {
+		wrtbak_remote_lock_release
+		wrtbak_remote_error_json remote-upload "$wrtbak_target" identity_unusable "device identity is unusable" ""
+		return 1
+	}
+	wrtbak_remote_path=$(wrtbak_join_remote_path "$wrtbak_remote_prefix" "$wrtbak_format" "$wrtbak_year" "$wrtbak_filename") || {
+		wrtbak_remote_lock_release
+		wrtbak_remote_error_json remote-upload "$wrtbak_target" invalid_config "cannot build remote path" ""
+		return 1
+	}
 	wrtbak_uploaded_remote_path=$wrtbak_remote_path
 	if ! wrtbak_remote_upload_driver "$wrtbak_target" "$wrtbak_local_path" "$wrtbak_uploaded_remote_path"; then
 		wrtbak_history_append remote-upload "$wrtbak_target" false command_failed "upload failed" "$wrtbak_uploaded_remote_path"
 		wrtbak_remote_lock_release
 		wrtbak_remote_error_json remote-upload "$wrtbak_target" command_failed "remote upload failed" ""
 		return 1
+	fi
+	wrtbak_alias_index_updated=false
+	wrtbak_upload_alias=$(wrtbak_remote_alias_path_name 2>/dev/null || printf '')
+	wrtbak_upload_uid=$(wrtbak_identity_current_uid 2>/dev/null || printf '%s' "$wrtbak_identity_uid")
+	wrtbak_alias_index_path=
+	if [ -n "$wrtbak_upload_alias" ]; then
+		wrtbak_alias_index_path=$(wrtbak_remote_alias_index_path "$wrtbak_remote_base" "$wrtbak_upload_alias" 2>/dev/null || printf '')
+	fi
+	if [ -n "$wrtbak_alias_index_path" ] && wrtbak_remote_upload_alias_index_driver "$wrtbak_target" "$wrtbak_alias_index_path" "$wrtbak_upload_uid" "$wrtbak_upload_alias" "$wrtbak_uploaded_remote_path"; then
+		wrtbak_alias_index_updated=true
 	fi
 	wrtbak_keep_local=$(wrtbak_main_option keep_local_after_upload 0)
 	if wrtbak_bool_enabled "$wrtbak_keep_local"; then
@@ -909,6 +1597,10 @@ wrtbak_remote_upload() {
 	printf '  "format": '; wrtbak_json_string "$wrtbak_format"; printf ',
 '
 	printf '  "remote_path": '; wrtbak_json_string "$wrtbak_uploaded_remote_path"; printf ',
+'
+	printf '  "alias_index_updated": %s,
+' "$wrtbak_alias_index_updated"
+	printf '  "alias_index_path": '; wrtbak_json_string "$wrtbak_alias_index_path"; printf ',
 '
 	printf '  "size": %s,
 ' "$wrtbak_size"
@@ -957,6 +1649,10 @@ wrtbak_remote_delete() {
 	esac
 	wrtbak_path=$(wrtbak_remote_validate_backup_path "$wrtbak_target" "$wrtbak_path") || {
 		wrtbak_remote_error_json remote-delete "$wrtbak_target" invalid_config "remote path is outside current device prefix" ""
+		return 1
+	}
+	wrtbak_remote_format_for_path "$wrtbak_path" >/dev/null || {
+		wrtbak_remote_error_json remote-delete "$wrtbak_target" invalid_format "remote backup suffix is not supported" "$wrtbak_path"
 		return 1
 	}
 	if ! wrtbak_remote_lock_acquire; then
@@ -1015,6 +1711,7 @@ wrtbak_remote_prune() {
 			wrtbak_prune_driver_name=rclone
 			;;
 	esac
+	wrtbak_remote_require_identity remote-prune "$wrtbak_target" || return 1
 	if ! wrtbak_remote_lock_acquire; then
 		wrtbak_remote_error_json remote-prune "$wrtbak_target" busy "another remote operation is running" ""
 		return 1

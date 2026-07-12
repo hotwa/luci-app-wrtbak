@@ -108,6 +108,7 @@ wrtbak_agent_status_json() {
 	wrtbak_agent_output_dir=$(wrtbak_output_dir)
 	wrtbak_agent_recent_backups "$wrtbak_agent_output_dir" "$wrtbak_recent"
 	wrtbak_recent_count=$(wc -l < "$wrtbak_recent" | awk '{ print $1 }')
+	wrtbak_identity_load_current || true
 
 	printf '{\n'
 	printf '  "tool_version": '; wrtbak_json_string "$WRTBAK_VERSION"; printf ',\n'
@@ -120,7 +121,13 @@ wrtbak_agent_status_json() {
 	printf '    "hostname": '; wrtbak_json_string "$(wrtbak_hostname)"; printf ',\n'
 	printf '    "management_ip": '; wrtbak_json_string "$(wrtbak_management_ip)"; printf ',\n'
 	printf '    "board_model": '; wrtbak_json_string "$(wrtbak_board_model)"; printf ',\n'
-	printf '    "board_name": '; wrtbak_json_string "$(wrtbak_board_name)"; printf '\n'
+	printf '    "board_name": '; wrtbak_json_string "$(wrtbak_board_name)"; printf ',\n'
+	printf '    "uid": '; wrtbak_json_string "$wrtbak_identity_uid"; printf ',\n'
+	printf '    "uid_algorithm": '; wrtbak_json_string "$wrtbak_identity_uid_algorithm"; printf ',\n'
+	printf '    "uid_status": '; wrtbak_json_string "$wrtbak_identity_status"; printf ',\n'
+	printf '    "alias": '; wrtbak_json_string "$wrtbak_identity_alias_value"; printf ',\n'
+	printf '    "board_slug": '; wrtbak_json_string "$wrtbak_identity_board_slug"; printf ',\n'
+	printf '    "mac_source": '; wrtbak_json_string "$wrtbak_identity_mac_source"; printf '\n'
 	printf '  },\n'
 	printf '  "firmware": {\n'
 	printf '    "distribution": '; wrtbak_json_string "$(wrtbak_release_value DISTRIB_ID OpenWrt)"; printf ',\n'
@@ -542,6 +549,17 @@ wrtbak_agent_jsonfilter_to_file() {
 	fi
 }
 
+wrtbak_agent_service_name_is_safe() {
+	wrtbak_agent_service_name=$1
+
+	case "$wrtbak_agent_service_name" in
+		""|*/*|*' '*|*'	'*|*..*|*[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-]*)
+			return 1
+			;;
+	esac
+	return 0
+}
+
 wrtbak_agent_validate_manifest() {
 	wrtbak_agent_manifest=$1
 
@@ -569,6 +587,10 @@ wrtbak_agent_restore_services() {
 	if [ ! -s "$wrtbak_agent_output" ]; then
 		wrtbak_die "manifest.json missing restore.restart_services"
 	fi
+	while IFS= read -r wrtbak_agent_service || [ -n "$wrtbak_agent_service" ]; do
+		[ -n "$wrtbak_agent_service" ] || continue
+		wrtbak_agent_service_name_is_safe "$wrtbak_agent_service" || wrtbak_die "manifest.json restore.restart_services contains invalid service: $wrtbak_agent_service"
+	done < "$wrtbak_agent_output"
 }
 
 wrtbak_agent_string_file_array_json() {

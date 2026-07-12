@@ -1,0 +1,126 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=01
+
+LOG_DIR=/root/wrtbak/firstboot
+LOG_FILE=$LOG_DIR/auto.log
+GATE_FILE=${WRTBAK_FIRSTBOOT_GATE_FILE:-$LOG_DIR/gate.json}
+
+wrtbak_auto_uci_get() {
+	uci -q get "wrtbak.main.$1" 2>/dev/null || printf '%s\n' "$2"
+}
+
+wrtbak_auto_enabled() {
+	case "$(wrtbak_auto_uci_get firstboot_auto_enabled 0)" in
+		1|true|yes|on|enabled)
+			return 0
+			;;
+	esac
+	return 1
+}
+
+wrtbak_auto_log() {
+	mkdir -p "$LOG_DIR" 2>/dev/null || true
+	printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)" "$*" >>"$LOG_FILE" 2>/dev/null || true
+}
+
+wrtbak_auto_write_gate() {
+	local state reason gate_tmp created_at
+	state=$1
+	reason=${2:-$state}
+	gate_tmp="${GATE_FILE}.tmp.$$"
+	created_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)
+	mkdir -p "$(dirname "$GATE_FILE")" 2>/dev/null || return 1
+	umask 077
+	{
+		printf '{\n'
+		printf '  "version": 1,\n'
+		printf '  "state": "%s",\n' "$state"
+		printf '  "reason": "%s",\n' "$reason"
+		printf '  "created_at": "%s"\n' "$created_at"
+		printf '}\n'
+	} >"$gate_tmp" || {
+		rm -f "$gate_tmp"
+		return 1
+	}
+	chmod 600 "$gate_tmp" 2>/dev/null || true
+	mv -f "$gate_tmp" "$GATE_FILE" || {
+		rm -f "$gate_tmp"
+		return 1
+	}
+	chmod 600 "$GATE_FILE" 2>/dev/null || true
+}
+
+start() {
+	local attempts sleep_seconds target auto_reboot attempt output rc last_reason
+
+	if ! wrtbak_auto_enabled; then
+		wrtbak_auto_write_gate disabled firstboot_auto_disabled || true
+		return 0
+	fi
+	[ ! -f /root/wrtbak/firstboot/done.json ] || {
+		wrtbak_auto_log "skip already_done"
+		wrtbak_auto_write_gate already_done matching_done_marker || true
+		return 0
+	}
+	wrtbak_auto_write_gate pending recovery_in_progress || true
+
+	attempts=$(wrtbak_auto_uci_get firstboot_auto_attempts 18)
+	sleep_seconds=$(wrtbak_auto_uci_get firstboot_auto_sleep 10)
+	target=$(wrtbak_auto_uci_get firstboot_auto_target default)
+	auto_reboot=$(wrtbak_auto_uci_get firstboot_auto_reboot 1)
+
+	case "$attempts" in ''|*[!0-9]*) attempts=18 ;; esac
+	case "$sleep_seconds" in ''|*[!0-9]*) sleep_seconds=10 ;; esac
+	[ "$attempts" -gt 0 ] || attempts=1
+
+	attempt=1
+	last_reason=unknown
+	while [ "$attempt" -le "$attempts" ]; do
+		output=$(wrtbak firstboot-auto --target "$target" --json 2>&1)
+		rc=$?
+		wrtbak_auto_log "attempt=$attempt rc=$rc"
+		printf '%s\n' "$output" >>"$LOG_FILE" 2>/dev/null || true
+
+		if [ "$rc" -eq 0 ] && printf '%s\n' "$output" | grep -F '"applied": true' >/dev/null 2>&1; then
+			wrtbak_auto_log "restore applied"
+			case "$auto_reboot" in
+				1|true|yes|on|enabled)
+					wrtbak_auto_write_gate reboot_pending restore_applied || true
+					wrtbak_auto_log "reboot requested"
+					reboot
+					;;
+				*)
+					wrtbak_auto_write_gate restored restore_applied || true
+					;;
+			esac
+			return 0
+		fi
+
+		if [ "$rc" -eq 0 ] && printf '%s\n' "$output" | grep -F '"reason": "already_done"' >/dev/null 2>&1; then
+			wrtbak_auto_write_gate already_done matching_done_marker || true
+			return 0
+		fi
+
+		if [ "$rc" -eq 0 ] && printf '%s\n' "$output" | grep -F '"reason": "no_current_device_backup"' >/dev/null 2>&1; then
+			last_reason=no_current_device_backup
+		elif [ "$rc" -eq 0 ]; then
+			last_reason=retryable_skip
+		else
+			last_reason=restore_error
+		fi
+
+		attempt=$((attempt + 1))
+		[ "$attempt" -le "$attempts" ] || break
+		sleep "$sleep_seconds"
+	done
+
+	wrtbak_auto_log "exhausted attempts=$attempts"
+	if [ "$last_reason" = no_current_device_backup ]; then
+		wrtbak_auto_write_gate no_backup no_current_device_backup || true
+	else
+		wrtbak_auto_write_gate failed_final "$last_reason" || true
+	fi
+	return 0
+}

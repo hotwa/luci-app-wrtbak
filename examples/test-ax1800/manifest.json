@@ -5,12 +5,21 @@
   "created_at": "2026-06-24T00:00:00Z",
   "tool_version": "0.1.0",
   "device": {
-    "label": "Test AX1800",
+    "uid": "xiaomi-ax1800-e29bf9dfcf",
+    "uid_algorithm": "wrtbak-board-mac-sha256-10/v1",
+    "uid_input": {
+      "board_slug": "xiaomi-ax1800",
+      "mac_hash": "e29bf9dfcf",
+      "mac_source": "br-lan"
+    },
+    "alias": "test-ax1800",
     "hostname": "test-router",
+    "board_name": "xiaomi,ax1800",
+    "model": "Xiaomi AX1800",
+    "label": "Test AX1800",
     "management_ip": "192.0.2.30",
     "market_model": "Xiaomi AX1800",
     "board_model": "Xiaomi AX1800",
-    "board_name": "xiaomi,ax1800",
     "target": "qualcommax/ipq60xx",
     "arch": "aarch64_cortex-a53"
   },
