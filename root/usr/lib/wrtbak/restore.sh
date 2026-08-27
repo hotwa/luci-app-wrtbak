@@ -1766,6 +1766,36 @@ wrtbak_restore_is_high_risk_service() {
 	return 1
 }
 
+wrtbak_restore_fix_openclaw_state() {
+	# Older images may not have the service account yet; in that case leave the
+	# restored files usable and let package postinst create it later.
+	wrtbak_openclaw_uid=$(id -u openclaw 2>/dev/null || true)
+	wrtbak_openclaw_gid=$(id -g openclaw 2>/dev/null || true)
+	[ -n "$wrtbak_openclaw_uid" ] && [ -n "$wrtbak_openclaw_gid" ] || return 0
+	while IFS= read -r wrtbak_openclaw_path; do
+		case "$wrtbak_openclaw_path" in
+			*/.openclaw)
+				wrtbak_openclaw_actual=$(wrtbak_root_path "$wrtbak_openclaw_path")
+				[ -d "$wrtbak_openclaw_actual" ] && [ ! -L "$wrtbak_openclaw_actual" ] || continue
+				chown -R "$wrtbak_openclaw_uid:$wrtbak_openclaw_gid" "$wrtbak_openclaw_actual" 2>/dev/null || true
+				find "$wrtbak_openclaw_actual" -type d -exec chmod u=rwx,go= {} \; 2>/dev/null || true
+				# Retain the owner execute bit for skill/workspace scripts.
+				find "$wrtbak_openclaw_actual" -type f -exec chmod u=rwX,go= {} \; 2>/dev/null || true
+				;;
+		esac
+	done <<EOF
+$(wrtbak_item_paths_by_id openclaw)
+EOF
+}
+
+wrtbak_restore_stop_openclaw() {
+	wrtbak_stop_services=$1
+	grep -Fx openclaw "$wrtbak_stop_services" >/dev/null 2>&1 || return 0
+	wrtbak_openclaw_init=$(wrtbak_root_path /etc/init.d/openclaw)
+	[ -x "$wrtbak_openclaw_init" ] || return 0
+	"$wrtbak_openclaw_init" stop >/dev/null 2>&1 || true
+}
+
 wrtbak_restore_handle_services() {
 	wrtbak_services=$1
 	wrtbak_restart_flag=$2
@@ -1785,7 +1815,12 @@ wrtbak_restore_handle_services() {
 		[ "$wrtbak_restart_flag" = "1" ] || continue
 		wrtbak_init=$(wrtbak_root_path "/etc/init.d/$wrtbak_service")
 		if [ -x "$wrtbak_init" ]; then
-			if "$wrtbak_init" restart >/dev/null 2>&1; then
+			if [ "$wrtbak_service" = openclaw ]; then
+				"$wrtbak_init" start >/dev/null 2>&1
+			else
+				"$wrtbak_init" restart >/dev/null 2>&1
+			fi
+			if [ "$?" -eq 0 ]; then
 				printf '%s\n' "$wrtbak_service" >> "$wrtbak_restarted"
 			else
 				printf '%s|restart failed\n' "$wrtbak_service" >> "$wrtbak_errors"
@@ -1987,6 +2022,12 @@ wrtbak_restore_apply() {
 	wrtbak_written_count=0
 	wrtbak_failed_path=
 	wrtbak_tab=$(printf '\t')
+	wrtbak_agent_restore_services "$wrtbak_extract/manifest.json" "$wrtbak_services"
+	if { [ "$wrtbak_items" = all ] || printf ',%s,' "$wrtbak_items" | grep -Fq ',openclaw,'; } && grep -Fq '/etc/config/openclaw' "$wrtbak_apply_table"; then
+		printf '%s\n' openclaw >> "$wrtbak_services"
+		sort -u "$wrtbak_services" -o "$wrtbak_services"
+	fi
+	[ "$wrtbak_restart_services" = 1 ] && wrtbak_restore_stop_openclaw "$wrtbak_services"
 	while IFS="$wrtbak_tab" read -r wrtbak_target wrtbak_type wrtbak_entry_mode wrtbak_size wrtbak_sha wrtbak_archive_path || [ -n "$wrtbak_target" ]; do
 		[ -n "$wrtbak_target" ] || continue
 		if ! wrtbak_restore_write_one "$wrtbak_extract" "$wrtbak_target" "$wrtbak_type" "$wrtbak_entry_mode" "$wrtbak_archive_path" "$wrtbak_log_dir" "$wrtbak_log_actual" "$wrtbak_apply_mode"; then
@@ -1999,7 +2040,7 @@ wrtbak_restore_apply() {
 		wrtbak_written_count=$((wrtbak_written_count + 1))
 	done < "$wrtbak_apply_table"
 
-	wrtbak_agent_restore_services "$wrtbak_extract/manifest.json" "$wrtbak_services"
+	wrtbak_restore_fix_openclaw_state
 	wrtbak_restore_handle_services "$wrtbak_services" "$wrtbak_restart_services" "$wrtbak_restarted" "$wrtbak_blocked" "$wrtbak_restart_errors"
 	wrtbak_reboot=$(wrtbak_agent_restore_bool "$wrtbak_extract/manifest.json" reboot_recommended true)
 	if [ -s "$wrtbak_blocked" ]; then

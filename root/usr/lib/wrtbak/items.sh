@@ -74,6 +74,7 @@ nikki|Nikki proxy|plugin|luci-app-nikki,nikki|/etc/config/nikki /etc/nikki|nikki
 dae|DAE/Daed proxy|plugin|luci-app-dae,luci-app-daed,dae,daed|/etc/config/dae /etc/config/daed /etc/dae /etc/daed|dae daed luci_daed|true|true|DAE and Daed transparent proxy configuration and generated final profiles
 mosdns|MosDNS|plugin|luci-app-mosdns,mosdns|/etc/config/mosdns /etc/mosdns|mosdns|false|true|MosDNS resolver configuration and rule files
 tailscale|Tailscale|plugin|luci-app-tailscale-community,luci-app-tailscale,tailscale|/etc/config/tailscale /etc/tailscale /etc/tailscale/tailscaled.state|tailscale|true|true|Tailscale settings and node state
+openclaw|OpenClaw|plugin|openclaw,luci-app-openclaw|/etc/config/openclaw|openclaw|true|true|OpenClaw configuration and personal state (runtime data excluded)
 wireguard|WireGuard|vpn|luci-app-wireguard,wireguard-tools,kmod-wireguard|/etc/config/network /etc/config/firewall /etc/wireguard|network firewall|true|true|WireGuard interfaces, peers, keys, and related firewall settings
 EOF
 }
@@ -213,6 +214,34 @@ wrtbak_detect_items_json() {
 
 wrtbak_item_paths_by_id() {
 	wrtbak_lookup_id=$1
+	if [ "$wrtbak_lookup_id" = openclaw ]; then
+		printf '%s\n' /etc/config/openclaw
+		wrtbak_openclaw_config=$(wrtbak_root_path /etc/config/openclaw)
+		[ -r "$wrtbak_openclaw_config" ] || return 0
+		wrtbak_openclaw_option() {
+			awk -v option="$1" '$1 == "option" && $2 == option { print $3; exit }' "$wrtbak_openclaw_config" | tr -d "'\""
+		}
+		wrtbak_install_root=$(wrtbak_openclaw_option install_root)
+		wrtbak_install_path=$(wrtbak_openclaw_option install_path)
+		[ -n "$wrtbak_install_root" ] || wrtbak_install_root=/opt
+		[ -n "$wrtbak_install_path" ] || wrtbak_install_path=$wrtbak_install_root
+		wrtbak_openclaw_seen=
+		for wrtbak_openclaw_base in "$wrtbak_install_root/openclaw/data/.openclaw" "$wrtbak_install_path/openclaw/data/.openclaw"; do
+			case "$wrtbak_openclaw_base" in
+				/*) ;;
+				*) continue ;;
+			esac
+			case "$wrtbak_openclaw_base" in
+				*".."*|*"//"*|*" "*|*"	"*) continue ;;
+			esac
+			wrtbak_openclaw_base=${wrtbak_openclaw_base%/}
+			[ -n "$wrtbak_openclaw_base" ] || continue
+			case " $wrtbak_openclaw_seen " in *" $wrtbak_openclaw_base "*) continue ;; esac
+			printf '%s\n' "$wrtbak_openclaw_base"
+			wrtbak_openclaw_seen="$wrtbak_openclaw_seen $wrtbak_openclaw_base"
+		done
+		return 0
+	fi
 	wrtbak_known_rows=$(mktemp "${TMPDIR:-/tmp}/wrtbak-known.XXXXXX") || wrtbak_die "cannot create temporary file"
 	wrtbak_known_item_rows > "$wrtbak_known_rows"
 	while IFS='|' read -r wrtbak_id wrtbak_label wrtbak_category wrtbak_packages wrtbak_paths wrtbak_item_row_services wrtbak_sensitive wrtbak_selected wrtbak_description; do
