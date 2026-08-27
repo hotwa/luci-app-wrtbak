@@ -129,6 +129,42 @@ wrtbak_collect_directory() {
 	done < "$wrtbak_collect_dir_files"
 }
 
+wrtbak_collect_openclaw_directory() {
+	# OpenClaw state is personal/sensitive. Keep the useful state tree while
+	# excluding generated runtime and dependency content.
+	wrtbak_collect_dir_target=$1
+	wrtbak_collect_dir_source=$2
+	wrtbak_collect_dir_stage=$3
+	wrtbak_collect_dir_inventory=$4
+	wrtbak_collect_dir_seen=$5
+	wrtbak_collect_dir_work=$6
+	wrtbak_collect_dir_dirs="$wrtbak_collect_dir_work/openclaw-dirs.list"
+	wrtbak_collect_dir_files="$wrtbak_collect_dir_work/openclaw-files.list"
+	(
+		cd "$wrtbak_collect_dir_source" && find . -type d \( -name runtime -o -name node_modules -o -name cache -o -name logs -o -name tmp -o -name pid -o -name lock -o -name sockets \) -prune -o -type d -print | sort
+	) > "$wrtbak_collect_dir_dirs" || wrtbak_die "cannot scan $wrtbak_collect_dir_source"
+	while IFS= read -r wrtbak_collect_dir_rel; do
+		if [ "$wrtbak_collect_dir_rel" = "." ]; then
+			wrtbak_collect_dir_child_target=${wrtbak_collect_dir_target%/}
+			wrtbak_collect_dir_child_source=$wrtbak_collect_dir_source
+		else
+			wrtbak_collect_dir_child_rel=${wrtbak_collect_dir_rel#./}
+			wrtbak_collect_dir_child_target="${wrtbak_collect_dir_target%/}/$wrtbak_collect_dir_child_rel"
+			wrtbak_collect_dir_child_source="$wrtbak_collect_dir_source/$wrtbak_collect_dir_child_rel"
+		fi
+		wrtbak_collect_directory_entry "$wrtbak_collect_dir_child_target" "$wrtbak_collect_dir_child_source" "$wrtbak_collect_dir_stage" "$wrtbak_collect_dir_inventory" "$wrtbak_collect_dir_seen"
+	done < "$wrtbak_collect_dir_dirs"
+	(
+		cd "$wrtbak_collect_dir_source" && find . -type d \( -name runtime -o -name node_modules -o -name cache -o -name logs -o -name tmp -o -name pid -o -name lock -o -name sockets \) -prune -o -type f -print | sort
+	) > "$wrtbak_collect_dir_files" || wrtbak_die "cannot scan $wrtbak_collect_dir_source"
+	while IFS= read -r wrtbak_collect_dir_rel; do
+		wrtbak_collect_dir_child_rel=${wrtbak_collect_dir_rel#./}
+		wrtbak_collect_dir_child_target="${wrtbak_collect_dir_target%/}/$wrtbak_collect_dir_child_rel"
+		wrtbak_collect_dir_child_source="$wrtbak_collect_dir_source/$wrtbak_collect_dir_child_rel"
+		wrtbak_collect_file_entry "$wrtbak_collect_dir_child_target" "$wrtbak_collect_dir_child_source" "$wrtbak_collect_dir_stage" "$wrtbak_collect_dir_inventory" "$wrtbak_collect_dir_seen"
+	done < "$wrtbak_collect_dir_files"
+}
+
 wrtbak_collect_path() {
 	wrtbak_target_path=$1
 	wrtbak_stage=$2
@@ -143,7 +179,10 @@ wrtbak_collect_path() {
 	fi
 
 	if [ -d "$wrtbak_source" ]; then
-		wrtbak_collect_directory "$wrtbak_target_path" "$wrtbak_source" "$wrtbak_stage" "$wrtbak_inventory" "$wrtbak_seen" "$wrtbak_work"
+		case "$wrtbak_target_path" in
+			*/.openclaw) wrtbak_collect_openclaw_directory "$wrtbak_target_path" "$wrtbak_source" "$wrtbak_stage" "$wrtbak_inventory" "$wrtbak_seen" "$wrtbak_work" ;;
+			*) wrtbak_collect_directory "$wrtbak_target_path" "$wrtbak_source" "$wrtbak_stage" "$wrtbak_inventory" "$wrtbak_seen" "$wrtbak_work" ;;
+		esac
 	elif [ -f "$wrtbak_source" ]; then
 		wrtbak_collect_file_entry "$wrtbak_target_path" "$wrtbak_source" "$wrtbak_stage" "$wrtbak_inventory" "$wrtbak_seen"
 	else
